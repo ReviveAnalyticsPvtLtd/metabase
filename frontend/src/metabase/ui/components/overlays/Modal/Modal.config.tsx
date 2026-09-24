@@ -31,7 +31,7 @@ export const modalOverrides = {
       centered: true,
       size: "lg",
       shadow: "lg_outline",
-      radius: "xs",
+      radius: "lg",
       padding: "lg",
       withinPortal: true,
     },

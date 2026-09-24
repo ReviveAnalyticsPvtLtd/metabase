@@ -2,8 +2,8 @@
 // NOTE: DO NOT ADD COLORS WITHOUT EXTREMELY GOOD REASON AND DESIGN REVIEW
 
 /**
- * Base color palette for Metabase themes.
- * These colors are used to define the light and dark themes.
+ * Base color palette for NubrixAI (Vercel Geist System).
+ * Pure monochrome depth with Vercel Blue (#0070F3) and high contrast.
  */
 const baseColors = {
   white: "hsla(0, 0%, 100%, 1.00)",
@@ -11,7 +11,7 @@ const baseColors = {
   gold: "hsla(50.6, 100%, 50%, 1)",
   upsellGem: "hsla(190, 100%, 50%, 1)",
 
-  // Brand colors (dynamic based on --mb-color-core-brand). Expanded to roughly match the values in the new color palette (but these should be reworked).
+  // Brand colors (dynamic based on --mb-color-core-brand).
   brand: {
     100: "color-mix(in srgb, var(--mb-color-core-brand), black 86%)",
     90: "color-mix(in srgb, var(--mb-color-core-brand), black 75%)",
@@ -19,7 +19,7 @@ const baseColors = {
     70: "color-mix(in srgb, var(--mb-color-core-brand), black 47%)",
     60: "color-mix(in srgb, var(--mb-color-core-brand), black 28%)",
     50: "color-mix(in srgb, var(--mb-color-core-brand), black 12%)",
-    40: "var(--mb-color-core-brand)", // This is the base brand color
+    40: "var(--mb-color-core-brand)", // Base brand color (#0070F3)
     30: "color-mix(in srgb, var(--mb-color-core-brand), white 35%)",
     20: "color-mix(in srgb, var(--mb-color-core-brand), white 70%)",
     10: "color-mix(in srgb, var(--mb-color-core-brand), white 91%)",
@@ -33,31 +33,105 @@ const baseColors = {
     70: "color-mix(in srgb, var(--mb-color-core-filter), black 47%)",
     60: "color-mix(in srgb, var(--mb-color-core-filter), black 28%)",
     50: "color-mix(in srgb, var(--mb-color-core-filter), black 12%)",
-    40: "var(--mb-color-core-filter)", // This is the base filter color
+    40: "var(--mb-color-core-filter)",
     30: "color-mix(in srgb, var(--mb-color-core-filter), white 35%)",
     20: "color-mix(in srgb, var(--mb-color-core-filter), white 70%)",
     10: "color-mix(in srgb, var(--mb-color-core-filter), white 91%)",
     5: "color-mix(in srgb, var(--mb-color-core-filter), white 96%)",
   },
 
+  // Vercel Blue & Cyan accents
+  vercel: {
+    blue: "#0070F3",
+    cyan: "#00DFD8",
+  },
+
+  // Nubrix scale tuned to Vercel high-contrast cyan/blue
+  nubrix: {
+    100: "hsla(212, 100%, 8%, 1)",
+    90: "hsla(212, 95%, 15%, 1)",
+    80: "hsla(212, 95%, 24%, 1)",
+    70: "hsla(212, 95%, 33%, 1)",
+    60: "hsla(212, 96%, 42%, 1)",
+    50: "hsla(212, 100%, 48%, 1)", // Vercel Blue #0070F3
+    40: "hsla(212, 100%, 55%, 1)",
+    30: "hsla(212, 100%, 65%, 1)",
+    20: "hsla(212, 100%, 80%, 1)",
+    10: "hsla(212, 100%, 92%, 1)",
+    5: "hsla(212, 100%, 97%, 1)",
+  },
+
   // Deprecated Blue
   blue: {
     100: "hsla(208, 100%, 8%, 1.00)",
-    90: "hsla(208, 89%, 14%, 1.00)",
-    80: "hsla(208, 82%, 22%, 1.00)",
-    70: "hsla(208, 80%, 31%, 1.00)",
-    60: "hsla(208, 78%, 42%, 1.00)",
-    50: "hsla(208, 68%, 53%, 1.00)",
-    40: "hsla(208, 72%, 60%, 1.00)", // brand
-    30: "hsla(208, 73%, 74%, 1.00)",
-    20: "hsla(209, 73%, 88%, 1.00)", // focus
-    10: "hsla(208, 79%, 96%, 1.00)", // baby blue
-    5: "hsla(210, 75%, 98%, 1.00)",
+    90: "hsla(208, 100%, 14%, 1.00)",
+    80: "hsla(208, 100%, 20%, 1.00)",
+    70: "hsla(208, 100%, 28%, 1.00)",
+    60: "hsla(208, 100%, 36%, 1.00)",
+    50: "hsla(208, 100%, 46%, 1.00)",
+    40: "hsla(208, 77%, 60%, 1.00)",
+    30: "hsla(208, 87%, 72%, 1.00)",
+    20: "hsla(208, 86%, 86%, 1.00)",
+    10: "hsla(208, 87%, 94%, 1.00)",
+    5: "hsla(208, 75%, 98%, 1)",
   },
 
-  // Deprecated Gray
+  // Vercel Geist Monochrome Scale (pure neutral blacks and grays)
+  orion: {
+    110: "hsla(0, 0%, 0%, 1)",      // #000000 Pure Black (Vercel Dark BG)
+    100: "hsla(0, 0%, 4%, 1)",      // #0A0A0A (Vercel Dark BG 200)
+    95: "hsla(0, 0%, 7%, 1)",       // #111111 (Vercel Dark Card/Surface)
+    90: "hsla(0, 0%, 9%, 1)",       // #171717 (Vercel Dark Hover)
+    80: "hsla(0, 0%, 15%, 1)",      // #262626 (Vercel Dark Border)
+    70: "hsla(0, 0%, 20%, 1)",      // #333333 (Vercel Dark Border Strong)
+    60: "hsla(0, 0%, 28%, 1)",      // #474747
+    50: "hsla(0, 0%, 40%, 1)",      // #666666 (Vercel Light Text Secondary)
+    40: "hsla(0, 0%, 53%, 1)",      // #888888 (Vercel Secondary Text)
+    30: "hsla(0, 0%, 65%, 1)",      // #A6A6A6
+    20: "hsla(0, 0%, 84%, 1)",      // #D6D6D6
+    10: "hsla(0, 0%, 92%, 1)",      // #EAEAEA (Vercel Light Border)
+    5: "hsla(0, 0%, 98%, 1)",       // #FAFAFA (Vercel Light BG 200)
+  },
+
+  orionAlpha: {
+    100: "hsla(0, 0%, 0%, 1)",
+    90: "hsla(0, 0%, 0%, 0.93)",
+    80: "hsla(0, 0%, 0%, 0.84)",
+    70: "hsla(0, 0%, 0%, 0.74)",
+    60: "hsla(0, 0%, 0%, 0.62)",
+    50: "hsla(0, 0%, 0%, 0.51)",
+    40: "hsla(0, 0%, 0%, 0.44)",
+    30: "hsla(0, 0%, 0%, 0.29)",
+    20: "hsla(0, 0%, 0%, 0.17)",
+    10: "hsla(0, 0%, 0%, 0.06)",
+    5: "hsla(0, 0%, 0%, 0.02)",
+  },
+
+  oceanAlpha: {
+    50: "hsla(212, 100%, 48%, 0.82)",
+    40: "hsla(212, 100%, 48%, 0.69)",
+    30: "hsla(212, 100%, 48%, 0.45)",
+    20: "hsla(212, 100%, 48%, 0.21)",
+    10: "hsla(212, 100%, 48%, 0.07)",
+    5: "hsla(212, 100%, 48%, 0.03)",
+  },
+
+  orionAlphaInverse: {
+    100: "hsla(0, 0%, 100%, 1.00)",
+    90: "hsla(0, 0%, 100%, 0.95)",
+    80: "hsla(0, 0%, 100%, 0.85)",
+    70: "hsla(0, 0%, 100%, 0.75)",
+    60: "hsla(0, 0%, 100%, 0.60)",
+    50: "hsla(0, 0%, 100%, 0.45)",
+    40: "hsla(0, 0%, 100%, 0.35)",
+    30: "hsla(0, 0%, 100%, 0.25)",
+    20: "hsla(0, 0%, 100%, 0.15)",
+    10: "hsla(0, 0%, 100%, 0.08)",
+    5: "hsla(0, 0%, 100%, 0.04)",
+  },
+
   gray: {
-    100: "hsla(206, 16%, 8%, 1.00)", // background-primary-inverse
+    100: "hsla(206, 16%, 8%, 1.00)",
     90: "hsla(202, 15%, 15%, 1.00)",
     80: "hsla(205, 15%, 23%, 1.00)",
     70: "hsla(206, 14%, 32%, 1.00)",
@@ -70,78 +144,6 @@ const baseColors = {
     5: "hsla(210, 25%, 98%, 1.00)",
   },
 
-  // Ocean
-  ocean: {
-    100: "hsla(208, 100%, 9%, 1)",
-    90: "hsla(208, 89%, 15%, 1)",
-    80: "hsla(208, 82%, 22%, 1)",
-    70: "hsla(208, 80%, 31%, 1)",
-    60: "hsla(208, 78%, 42%, 1)",
-    50: "hsla(208, 68%, 53%, 1)",
-    40: "hsla(208, 72%, 60%, 1)",
-    30: "hsla(208, 73%, 74%, 1)",
-    20: "hsla(209, 73%, 88%, 1)",
-    10: "hsla(208, 79%, 96%, 1)",
-    5: "hsla(208, 75%, 98%, 1)",
-  },
-
-  // Orion
-  orion: {
-    110: "hsla(205, 63%, 5%, 1)",
-    100: "hsla(204, 66%, 8%, 1)",
-    95: "hsla(204, 53%, 10%, 1)",
-    90: "hsla(204, 34%, 14%, 1)",
-    80: "hsla(205, 19%, 23%, 1)",
-    70: "hsla(204, 12%, 32%, 1)",
-    60: "hsla(205, 8%, 43%, 1)",
-    50: "hsla(203, 5%, 53%, 1)",
-    40: "hsla(205, 6%, 60%, 1)",
-    30: "hsla(203, 6%, 73%, 1)",
-    20: "hsla(195, 6%, 87%, 1)",
-    10: "hsla(240, 4%, 95%, 1)",
-    5: "hsla(240, 11%, 98%, 1)",
-  },
-
-  // Orion Alpha
-  orionAlpha: {
-    100: "hsla(204, 68%, 8%, 1)",
-    90: "hsla(204, 66%, 8%, 0.93)",
-    80: "hsla(204, 66%, 8%, 0.84)",
-    70: "hsla(204, 66%, 8%, 0.74)",
-    60: "hsla(204, 66%, 8%, 0.62)",
-    50: "hsla(204, 66%, 8%, 0.51)",
-    40: "hsla(204, 66%, 8%, 0.44)",
-    30: "hsla(204, 66%, 8%, 0.29)",
-    20: "hsla(204, 66%, 8%, 0.17)",
-    10: "hsla(204, 66%, 8%, 0.05)",
-    5: "hsla(204, 66%, 8%, 0.02)",
-  },
-
-  // Ocean Alpha. These are not in use yet because of whitelabeling
-  oceanAlpha: {
-    50: "hsla(208, 95%, 42%, 0.82)",
-    40: "hsla(208, 95%, 42%, 0.69)",
-    30: "hsla(208, 95%, 42%, 0.45)",
-    20: "hsla(208, 95%, 42%, 0.21)",
-    10: "hsla(208, 95%, 42%, 0.07)",
-    5: "hsla(208, 95%, 42%, 0.03)",
-  },
-
-  orionAlphaInverse: {
-    100: "hsla(0, 0%, 100%, 1.00)",
-    90: "hsla(0, 0%, 100%, 0.98)",
-    80: "hsla(0, 0%, 100%, 0.95)",
-    70: "hsla(0, 0%, 100%, 0.85)",
-    60: "hsla(0, 0%, 100%, 0.69)",
-    50: "hsla(0, 0%, 100%, 0.53)",
-    40: "hsla(0, 0%, 100%, 0.46)",
-    30: "hsla(0, 0%, 100%, 0.33)",
-    20: "hsla(0, 0%, 100%, 0.21)",
-    10: "hsla(0, 0%, 100%, 0.10)",
-    5: "hsla(0, 0%, 100%, .01)",
-  },
-
-  // Lobster
   lobster: {
     100: "hsla(0, 81%, 11%, 1)",
     90: "hsla(1, 75%, 17%, 1)",
@@ -153,10 +155,9 @@ const baseColors = {
     30: "hsla(1, 85%, 81%, 1)",
     20: "hsla(2, 67%, 90%, 1)",
     10: "hsla(0, 76%, 97%, 1)",
-    5: "hsla(0, 100%, 99%, 1)",
+    5: "hsla(0, 56%, 98%, 1)",
   },
 
-  // Flamingo
   flamingo: {
     100: "hsla(334, 75%, 10%, 1)",
     90: "hsla(334, 79%, 17%, 1)",
@@ -171,7 +172,6 @@ const baseColors = {
     5: "hsla(330, 67%, 99%, 1)",
   },
 
-  // Mango
   mango: {
     100: "hsla(26, 89%, 7%, 1)",
     90: "hsla(26, 79%, 13%, 1)",
@@ -186,37 +186,20 @@ const baseColors = {
     5: "hsla(30, 100%, 98%, 1)",
   },
 
-  // Dubloon
-  dubloon: {
-    100: "hsla(45, 100%,  5%, 1)",
-    90: "hsla(46, 88%,  10%, 1)",
-    80: "hsla(46, 82%,  15%, 1)",
-    70: "hsla(46, 79%,  22%, 1)",
-    60: "hsla(46, 76%,  30%, 1)",
-    50: "hsla(46, 76%,  37%, 1)",
-    40: "hsla(46, 75%,  44%, 1)",
-    30: "hsla(46, 81%,  52%, 1)",
-    20: "hsla(46, 94%,  74%, 1)",
-    10: "hsla(46, 96%,  90%, 1)",
-    5: "hsla(45, 100%, 96%, 1)",
-  },
-
-  // Palm
   palm: {
-    100: "hsla(94, 85%, 5%, 1)",
-    90: "hsla(92, 62%, 10%, 1)",
-    80: "hsla(89, 54%, 16%, 1)",
-    70: "hsla(89, 50%, 24%, 1)",
-    60: "hsla(89, 48%, 32%, 1)",
-    50: "hsla(89, 48%, 40%, 1)",
-    40: "hsla(89, 47%, 45%, 1)",
-    30: "hsla(90, 47%, 60%, 1)",
-    20: "hsla(91, 51%, 81%, 1)",
-    10: "hsla(92, 65%, 92%, 1)",
-    5: "hsla(93, 73%, 97%, 1)",
+    100: "hsla(158, 86%, 10%, 1)",
+    90: "hsla(158, 82%, 16%, 1)",
+    80: "hsla(159, 78%, 23%, 1)",
+    70: "hsla(158, 76%, 33%, 1)",
+    60: "hsla(158, 74%, 43%, 1)",
+    50: "hsla(158, 73%, 53%, 1)",
+    40: "hsla(159, 81%, 64%, 1)",
+    30: "hsla(158, 82%, 78%, 1)",
+    20: "hsla(160, 68%, 88%, 1)",
+    10: "hsla(160, 78%, 95%, 1)",
+    5: "hsla(160, 55%, 98%, 1)",
   },
 
-  // Seafoam
   seafoam: {
     100: "hsla(180, 84%, 5%, 1)",
     90: "hsla(180, 34%, 12%, 1)",
@@ -231,26 +214,49 @@ const baseColors = {
     5: "hsla(180, 69%, 97%, 1)",
   },
 
-  // Octopus
+  dubloon: {
+    100: "hsla(38, 87%, 11%, 1)",
+    90: "hsla(38, 86%, 18%, 1)",
+    80: "hsla(38, 83%, 26%, 1)",
+    70: "hsla(37, 81%, 37%, 1)",
+    60: "hsla(37, 79%, 48%, 1)",
+    50: "hsla(37, 88%, 59%, 1)",
+    40: "hsla(37, 92%, 69%, 1)",
+    30: "hsla(37, 92%, 81%, 1)",
+    20: "hsla(37, 83%, 90%, 1)",
+    10: "hsla(37, 88%, 96%, 1)",
+    5: "hsla(40, 67%, 98%, 1)",
+  },
+
+  ocean: {
+    100: "hsla(208, 97%, 11%, 1)",
+    90: "hsla(208, 97%, 17%, 1)",
+    80: "hsla(208, 97%, 26%, 1)",
+    70: "hsla(208, 97%, 36%, 1)",
+    60: "hsla(208, 97%, 46%, 1)",
+    50: "hsla(208, 95%, 57%, 1)",
+    40: "hsla(208, 96%, 68%, 1)",
+    30: "hsla(208, 96%, 80%, 1)",
+    20: "hsla(208, 88%, 90%, 1)",
+    10: "hsla(208, 92%, 96%, 1)",
+    5: "hsla(208, 75%, 98%, 1)",
+  },
+
   octopus: {
-    100: "hsla(240, 7%, 9%, 1)",
-    90: "hsla(240, 7%, 9%, 1)",
-    80: "hsla(240, 43%, 33%, 1)",
-    70: "hsla(240, 40%, 46%, 1)",
-    60: "hsla(240, 46%, 58%, 1)",
-    50: "hsla(240, 65%, 69%, 1)",
-    40: "hsla(240, 69%, 74%, 1)",
-    30: "hsla(240, 49%, 81%, 1)",
-    20: "hsla(240, 66%, 92%, 1)",
-    10: "hsla(240, 100%, 97%, 1)",
-    5: "hsla(240, 100%, 99%, 1)",
+    100: "hsla(268, 71%, 14%, 1)",
+    90: "hsla(268, 68%, 23%, 1)",
+    80: "hsla(268, 66%, 34%, 1)",
+    70: "hsla(268, 63%, 47%, 1)",
+    60: "hsla(268, 76%, 60%, 1)",
+    50: "hsla(268, 90%, 72%, 1)",
+    40: "hsla(268, 91%, 79%, 1)",
+    30: "hsla(268, 91%, 87%, 1)",
+    20: "hsla(268, 78%, 93%, 1)",
+    10: "hsla(268, 86%, 97%, 1)",
+    5: "hsla(264, 60%, 98%, 1)",
   },
 };
 
-/**
- * These base colors are only for use in defining `light.ts` and `dark.ts` themes.
- * One exemption are colors that are strictly non-theme dependent.
- *
- * Don't use it for anything else or you will be fired.
- */
-export const getBaseColorsForThemeDefinitionOnly = () => baseColors;
+export const getBaseColorsForThemeDefinitionOnly = () => {
+  return baseColors;
+};

@@ -22,13 +22,19 @@ export const Sidebar = styled.aside<{
   position: relative;
   flex-shrink: 0;
   align-items: center;
-  background-color: var(--mb-color-background_page-primary);
+  background-color: color-mix(
+    in srgb,
+    var(--mb-color-background_page-primary) 85%,
+    transparent
+  );
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   z-index: 4;
   width: ${(props) => props.width ?? NAV_SIDEBAR_WIDTH};
   ${(props) =>
     props.side === "left"
-      ? "border-inline-end: 1px solid var(--mb-color-border-neutral);"
-      : "border-inline-start: 1px solid var(--mb-color-border-neutral);"}
+      ? "border-inline-end: 1px solid var(--mb-color-border-subtle);"
+      : "border-inline-start: 1px solid var(--mb-color-border-subtle);"}
 
   ${breakpointMaxSmall} {
     width: 90vw;

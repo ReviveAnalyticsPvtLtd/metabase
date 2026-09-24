@@ -43,10 +43,15 @@ export const HomeLayout = ({ children }: HomeLayoutProps): ReactNode => {
         base: "1rem",
         md: "3rem 4rem",
         lg: "4rem 7rem 2rem",
-        xl: "10rem 15rem 4rem",
+        xl: "6rem 12rem 4rem",
       }}
       mih="100%"
       bg="background_page-secondary"
+      style={{
+        backgroundImage:
+          "radial-gradient(1200px 650px at 15% -10%, color-mix(in srgb, var(--mb-color-core-brand) 13%, transparent), transparent 70%), radial-gradient(800px 450px at 85% 15%, rgba(99, 102, 241, 0.07), transparent 60%), radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--mb-color-text-primary) 3.5%, transparent) 1px, transparent 0)",
+        backgroundSize: "100% 100%, 100% 100%, 28px 28px",
+      }}
     >
       {landingPageIllustration &&
         (landingPageIllustration.isDefault ? (
@@ -83,8 +88,8 @@ export const HomeLayout = ({ children }: HomeLayoutProps): ReactNode => {
         pos="relative"
         mt={{
           base: "2.5rem",
-          md: "4rem",
-          lg: "6rem",
+          md: "3.5rem",
+          lg: "4.5rem",
         }}
       >
         {children}

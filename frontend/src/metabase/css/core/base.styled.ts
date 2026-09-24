@@ -11,6 +11,29 @@ export const rootStyle = css`
   display: flex;
   flex-direction: column;
   background-color: var(--mb-color-background_page-secondary);
+
+  /* Vercel Geist Signature Ambient Cone & Precision Grid */
+  background-image:
+    /* Top ambient cone spotlight (Vercel signature) */
+    radial-gradient(
+      ellipse 80% 50% at 50% -20%,
+      color-mix(in srgb, var(--mb-color-core-brand) 12%, transparent),
+      transparent 70%
+    ),
+    /* Secondary subtle blue horizon beam */
+    radial-gradient(
+      1000px 500px at 80% -10%,
+      rgba(0, 112, 243, 0.06),
+      transparent 60%
+    ),
+    /* Vercel 24px precision dot matrix */
+    radial-gradient(
+      circle at 1px 1px,
+      color-mix(in srgb, var(--mb-color-text-primary) 3.5%, transparent) 1px,
+      transparent 0
+    );
+  background-size: 100% 100%, 100% 100%, 24px 24px;
+  background-attachment: fixed;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 `;
@@ -33,11 +56,6 @@ export const baseStyle = css`
     }
   }
 
-  /*
-  override default padding and margin on lists
-  in most cases we won't be using list-style so
-  the padding isn't necessary
-*/
   ul,
   ol {
     padding: 0;
@@ -45,8 +63,6 @@ export const baseStyle = css`
     list-style-type: none;
   }
 
-  // Mobile Safari sets the opacity of disabled inputs/textareas to 0.4 which we don't want
-  // https://github.com/metabase/metabase/issues/49170
   @supports (-webkit-touch-callout: none) {
     textarea:disabled,
     input:disabled {

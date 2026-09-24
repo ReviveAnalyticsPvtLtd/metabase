@@ -118,7 +118,7 @@
   :export?    false
   :visibility :authenticated
   :type       :string
-  :default    "auto")
+  :default    "dark")
 
 (defsetting trial-banner-dismissal-timestamp
   (deferred-tru "The ISO8601 date when a user last dismissed the trial banner.")

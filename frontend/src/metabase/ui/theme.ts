@@ -62,9 +62,9 @@ import {
   stackOverrides,
   switchOverrides,
   tabsOverrides,
+  textareaOverrides,
   textInputOverrides,
   textOverrides,
-  textareaOverrides,
   timeInputOverrides,
   timelineOverrides,
   titleOverrides,
@@ -72,28 +72,28 @@ import {
 } from "./components";
 import { getMantineThemeColors } from "./utils/colors";
 
-// Elevation tokens from the design system.
+// Elevation tokens from Vercel Geist design system.
 /* eslint-disable metabase/no-color-literals */
 const LIGHT_SHADOWS = {
-  xs: "0 1px 3px 0 rgba(0, 0, 0, 0.07)",
+  xs: "0 1px 2px rgba(0, 0, 0, 0.05)",
   xs_outline:
-    "0 0 0 0.5px rgba(0, 0, 0, 0.07), 0 1px 3px 0 rgba(0, 0, 0, 0.07)",
-  sm: "0 1px 4px 0 rgba(0, 0, 0, 0.05), 0 5px 15px 0 rgba(0, 0, 0, 0.10)",
+    "0 0 0 1px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04)",
+  sm: "0 0 0 1px rgba(0, 0, 0, 0.08), 0 2px 4px rgba(0, 0, 0, 0.04)",
   sm_outline:
-    "0 0 0 0.5px rgba(0, 0, 0, 0.07), 0 1px 4px 0 rgba(0, 0, 0, 0.05), 0 5px 15px 0 rgba(0, 0, 0, 0.10)",
+    "0 0 0 1px rgba(0, 0, 0, 0.08), 0 4px 12px rgba(0, 0, 0, 0.05)",
   lg_outline:
-    "0 0 0 0.5px rgba(0, 0, 0, 0.07), 0 5px 15px 0 rgba(0, 0, 0, 0.15), 0 30px 60px 0 rgba(0, 0, 0, 0.20)",
+    "0 0 0 1px rgba(0, 0, 0, 0.08), 0 16px 32px rgba(0, 0, 0, 0.08)",
 };
 
 const DARK_SHADOWS = {
-  xs: "0 1px 3px 0 rgba(0, 0, 0, 0.20)",
+  xs: "0 0 0 1px #262626",
   xs_outline:
-    "0 0 0 0.5px rgba(0, 0, 0, 0.15), 0 1px 3px 0 rgba(0, 0, 0, 0.20)",
-  sm: "0 1px 4px 0 rgba(0, 0, 0, 0.07), 0 5px 15px 0 rgba(0, 0, 0, 0.20)",
+    "0 0 0 1px #262626, 0 1px 2px rgba(0, 0, 0, 0.4)",
+  sm: "0 0 0 1px #262626, 0 8px 16px -4px rgba(0, 0, 0, 0.5)",
   sm_outline:
-    "0 0 0 0.5px rgba(0, 0, 0, 0.15), 0 1px 4px 0 rgba(0, 0, 0, 0.07), 0 5px 15px 0 rgba(0, 0, 0, 0.20)",
+    "0 0 0 1px #333333, 0 8px 24px -4px rgba(0, 0, 0, 0.6)",
   lg_outline:
-    "0 0 0 0.5px rgba(0, 0, 0, 0.15), 0 5px 15px 0 rgba(0, 0, 0, 0.20), 0 30px 60px 0 rgba(0, 0, 0, 0.40)",
+    "0 0 0 1px #333333, 0 24px 48px -12px rgba(0, 0, 0, 0.8)",
 };
 /* eslint-enable metabase/no-color-literals */
 
@@ -114,15 +114,15 @@ const SPACING_SCALE = {
 
 export type SpacingScaleKey = keyof typeof SPACING_SCALE;
 
-// Radius tokens from the design system.
+// Vercel Geist disciplined tight radius scale
 const RADIUS_SCALE = {
   xxxs: rem(2),
   xxs: rem(4),
   xs: rem(6),
-  sm: rem(8),
-  md: rem(12),
-  lg: rem(16),
-  xl: rem(24),
+  sm: rem(6),
+  md: rem(8),
+  lg: rem(12),
+  xl: rem(16),
 };
 
 export type RadiusScaleKey = keyof typeof RADIUS_SCALE;
@@ -145,7 +145,6 @@ export const getThemeOverrides = (
   colors: getMantineThemeColors(colorScheme, whitelabelColors),
   primaryColor: "core-brand",
   primaryShade: 0,
-  // Store colorScheme in other property for access later
   other: {
     ...DEFAULT_METABASE_COMPONENT_THEME,
     colorScheme,
@@ -160,8 +159,8 @@ export const getThemeOverrides = (
     xs: rem(11),
     sm: rem(12),
     md: rem(14),
-    lg: rem(17),
-    xl: rem(21),
+    lg: rem(16),
+    xl: rem(20),
   },
   lineHeights: {
     xs: "100%",
@@ -185,7 +184,7 @@ export const getThemeOverrides = (
         lineHeight: rem(24),
       },
       h4: {
-        fontSize: rem(17),
+        fontSize: rem(16),
         lineHeight: rem(20),
       },
       h5: {
@@ -198,8 +197,8 @@ export const getThemeOverrides = (
       },
     },
   },
-  fontFamily: "var(--mb-default-font-family)",
-  fontFamilyMonospace: '"JetBrains Mono", monospace',
+  fontFamily: 'Geist, Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif',
+  fontFamilyMonospace: '"Geist Mono", "JetBrains Mono", monospace',
   components: {
     ...accordionOverrides,
     ...actionIconOverrides,

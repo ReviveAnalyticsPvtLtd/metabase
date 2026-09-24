@@ -7,9 +7,9 @@ const baseColors = getBaseColorsForThemeDefinitionOnly();
 // To be removed once the rename in GDGT-2517 is complete. Prefer the keys in
 // `actualColors` below.
 const deprecatedColors = {
-  "admin-navbar": baseColors.octopus[60],
-  "admin-navbar-secondary": baseColors.octopus[40],
-  "admin-navbar-inverse": baseColors.octopus[80],
+  "admin-navbar": baseColors.orion[80],
+  "admin-navbar-secondary": baseColors.orion[60],
+  "admin-navbar-inverse": baseColors.orion[90],
   "background-brand": baseColors.brand[10],
   "background-filter": baseColors.filter[5],
   "background-disabled": baseColors.orionAlpha[10],
@@ -31,12 +31,12 @@ const deprecatedColors = {
   "background-error": baseColors.lobster[10],
   "background-success": baseColors.palm[5],
   "background-success-secondary": baseColors.palm[20],
-  brand: baseColors.blue[40],
+  brand: baseColors.nubrix[40],
   "brand-hover": baseColors.brand[50],
   danger: baseColors.lobster[50],
   error: baseColors.lobster[50],
   filter: baseColors.octopus[50],
-  focus: baseColors.blue[20],
+  focus: baseColors.nubrix[20],
   "icon-brand": baseColors.brand[50], // Matches text-brand
   "icon-brand-inverse": baseColors.brand[20],
   "icon-primary": baseColors.orionAlpha[80], // Matches text-primary
@@ -197,7 +197,7 @@ const actualColors = {
 };
 
 /**
- * The default light theme for Metabase.
+ * The default light theme for NubrixAI.
  */
 export const METABASE_LIGHT_THEME: MetabaseThemeV2 = {
   version: 2,

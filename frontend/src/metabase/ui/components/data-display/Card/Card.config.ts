@@ -8,7 +8,7 @@ export const cardOverrides = {
       // Mantine's default is `padding: "md"`, which is 12px in the new scale.
       // Pin the padding to "lg" (16px) to preserve the previous default.
       padding: "lg",
-      shadow: "xs",
+      shadow: "sm",
     },
     classNames: {
       section: CardStyles.section,

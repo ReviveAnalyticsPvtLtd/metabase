@@ -11,20 +11,20 @@
 (set! *warn-on-reflection* true)
 
 (defsetting application-name
-  (deferred-tru "Replace the word “Metabase” wherever it appears.")
+  (deferred-tru "Replace the word “NubrixAI” wherever it appears.")
   :encryption :no
   :visibility :public
   :export?    true
   :type       :string
   :audit      :getter
   :feature    :whitelabel
-  :default    "Metabase")
+  :default    "NubrixAI")
 
 (defsetting site-name
   (deferred-tru "The name used for this instance of {0}."
                 (setting/application-name-for-setting-descriptions application-name))
   :encryption :no
-  :default    "Metabase"
+  :default    "NubrixAI"
   :audit      :getter
   :visibility :settings-manager
   :export?    true)
@@ -136,7 +136,7 @@ To change the chart colors:
   :visibility :public
   :export?    true
   :type       :string
-  :default    "Lato"
+  :default    "Poppins"
   :feature    :whitelabel
   :audit      :getter
   :setter     (fn [new-value]
@@ -175,7 +175,7 @@ See [fonts](../configuring-metabase/fonts.md).")
 (defn application-color
   "The primary color, a.k.a. brand color"
   []
-  (or (:brand (application-colors)) "#509EE3"))
+  (or (:brand (application-colors)) "#0070F3"))
 
 (defn secondary-chart-color
   "The first 'Additional chart color'"

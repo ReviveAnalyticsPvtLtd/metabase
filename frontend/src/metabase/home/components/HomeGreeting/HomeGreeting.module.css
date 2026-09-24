@@ -1,12 +1,12 @@
 .greetingLogoContainer {
   position: relative;
-  width: 4rem;
-  height: 2.5rem;
+  width: 3.5rem;
+  height: 2.25rem;
   margin-inline-end: 0.5rem;
 
   @media (--breakpoint-min-xl) {
     width: 4rem;
-    height: 3rem;
+    height: 2.5rem;
   }
 }
 
@@ -25,13 +25,20 @@
 }
 
 .greetingMessage {
-  color: var(--mb-color-text-primary);
-  font-weight: bold;
-  line-height: 1.5rem;
-  font-size: 1.125rem;
-  margin-left: 0.5rem;
+  font-weight: 600;
+  line-height: 2rem;
+  font-size: 1.4rem;
+  letter-spacing: -0.03em;
+  margin-left: 0.75rem;
+  background: linear-gradient(
+    180deg,
+    var(--mb-color-text-primary) 20%,
+    color-mix(in srgb, var(--mb-color-text-primary) 50%, transparent) 100%
+  );
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
 
   @media (--breakpoint-min-xl) {
-    font-size: 1.25rem;
+    font-size: 1.75rem;
   }
 }

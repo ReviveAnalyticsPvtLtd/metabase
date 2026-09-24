@@ -50,10 +50,24 @@ type NodeRootProps = ComponentProps<typeof TreeNode.Root> & {
 
 export const NodeRoot = styled(TreeNode.Root)<NodeRootProps>`
   color: ${(props) => getTextColor(props.isSelected)};
-  background-color: ${(props) =>
-    props.isSelected ? alpha("core-brand", 0.2) : "unset"};
   padding-left: ${(props) => props.depth}rem;
-  border-radius: 4px;
+  border-radius: 8px;
+  transition: background 160ms cubic-bezier(0.16, 1, 0.3, 1), color 160ms ease, box-shadow 160ms ease;
+
+  ${(props) =>
+    props.isSelected
+      ? css`
+          background: linear-gradient(
+            90deg,
+            color-mix(in srgb, var(--mb-color-core-brand) 18%, transparent) 0%,
+            color-mix(in srgb, var(--mb-color-core-brand) 5%, transparent) 100%
+          );
+          box-shadow: inset 2.5px 0 0 var(--mb-color-core-brand);
+          font-weight: 600;
+        `
+      : css`
+          background-color: transparent;
+        `}
 
   &:focus-within {
     outline: 2px solid var(--mb-color-input-focus);
@@ -65,7 +79,11 @@ export const NodeRoot = styled(TreeNode.Root)<NodeRootProps>`
   }
 
   &:hover {
-    background-color: ${() => alpha("core-brand", 0.35)};
+    background: linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--mb-color-core-brand) 12%, transparent) 0%,
+      transparent 100%
+    );
     color: var(--mb-color-core-brand);
 
     ${ExpandToggleButton} {
@@ -104,7 +122,7 @@ export const FullWidthButton = styled.button<{ isSelected: boolean }>`
 
   ${itemContentStyle}
   ${TreeNode.NameContainer} {
-    font-weight: 700;
+    font-weight: 600;
     color: ${(props) => (props.isSelected ? color("core-brand") : "inherit")};
     text-align: start;
 

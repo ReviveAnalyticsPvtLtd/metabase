@@ -12,9 +12,9 @@ const ORION_110_ALPHA_20 = "hsla(205, 63%, 5%, 0.2)";
 // To be removed once the rename in GDGT-2517 is complete. Prefer the keys in
 // `actualColors` below.
 const deprecatedColors = {
-  "admin-navbar": baseColors.octopus[80],
-  "admin-navbar-secondary": baseColors.octopus[60],
-  "admin-navbar-inverse": baseColors.octopus[60],
+  "admin-navbar": baseColors.orion[100],
+  "admin-navbar-secondary": baseColors.orion[80],
+  "admin-navbar-inverse": baseColors.orion[70],
   "background-brand": baseColors.brand[90],
   "background-filter": baseColors.filter[90],
   "background-disabled": baseColors.orionAlphaInverse[10],
@@ -36,12 +36,12 @@ const deprecatedColors = {
   "background-error": baseColors.lobster[90],
   "background-success": baseColors.palm[90],
   "background-success-secondary": baseColors.palm[70],
-  brand: baseColors.blue[40],
+  brand: baseColors.nubrix[40],
   "brand-hover": baseColors.brand[30],
   danger: baseColors.lobster[50],
   error: baseColors.lobster[50],
   filter: baseColors.octopus[40],
-  focus: baseColors.blue[70],
+  focus: baseColors.nubrix[40],
   "icon-brand": baseColors.brand[40], // Matches text-brand
   "icon-brand-inverse": baseColors.brand[50],
   "icon-primary": baseColors.orionAlphaInverse[80], // Matches text-primary
@@ -168,11 +168,11 @@ const actualColors = {
   "illustration-secondary-brand": baseColors.brand[80],
   "illustration-tertiary-brand": baseColors.brand[90],
   "input-background": baseColors.orionAlphaInverse[10],
-  "input-focus": baseColors.blue[70],
+  "input-focus": baseColors.nubrix[40],
   "modal-overlay": baseColors.orionAlpha[70],
-  "navbar-admin": baseColors.octopus[80],
-  "navbar-admin-inverse": baseColors.octopus[60],
-  "navbar-admin-secondary": baseColors.octopus[60],
+  "navbar-admin": baseColors.orion[100],
+  "navbar-admin-inverse": baseColors.orion[70],
+  "navbar-admin-secondary": baseColors.orion[80],
   "shadow-default": ORION_110_ALPHA_20,
   "switch-checked": baseColors.brand[30],
   "switch-disabled": baseColors.orionAlphaInverse[20],
@@ -199,7 +199,7 @@ const actualColors = {
 };
 
 /**
- * The default dark theme for Metabase.
+ * The default dark theme for NubrixAI.
  */
 export const METABASE_DARK_THEME: MetabaseThemeV2 = {
   version: 2,
