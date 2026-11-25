@@ -53,7 +53,7 @@ function genericCategoryInfo(value: string): CategoryInfo {
 
 function findCategoryColumn(cols: Array<{ name: string }>, rows: unknown[][]): number {
   const preferred = cols.findIndex((column) => /customer.*type|category|segment|type|status/i.test(column.name));
-  if (preferred >= 0) return preferred;
+  if (preferred >= 0) {return preferred;}
   return cols.findIndex((_, index) => {
     const values = new Set(rows.map((row) => row[index]).filter((value) => typeof value === "string"));
     return values.size > 1 && values.size <= 12;

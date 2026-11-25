@@ -1,5 +1,4 @@
 import logoUrl from "assets/img/logo.svg";
-
 import { PLUGIN_LOGO_ICON_COMPONENTS } from "metabase/plugins";
 
 interface LogoIconProps {
