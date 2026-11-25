@@ -6,7 +6,7 @@ import { setup } from "./setup";
 describe("QuestionSettingsSidebar", () => {
   it("should render the question settings sidesheet", () => {
     setup({});
-    expect(screen.getByText("Question settings")).toBeInTheDocument();
+    expect(screen.getByText("Analysis settings")).toBeInTheDocument();
   });
 
   it("should show a model title for models", () => {

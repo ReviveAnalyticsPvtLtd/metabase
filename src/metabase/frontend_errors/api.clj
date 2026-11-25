@@ -4,6 +4,7 @@
    [metabase.api.common :as api]
    [metabase.api.macros :as api.macros]
    [metabase.request.core :as request]
+   [metabase.util.log :as log]
    [metabase.util.malli.registry :as mr]
    [metabase.util.throttle :as u.throttle]
    [throttle.core :as throttle])
@@ -46,8 +47,13 @@
    with the given `type` label."
   [_route-params
    _query-params
-   {:keys [type]} :- [:map {:closed true} [:type ::frontend-error-type]]
+   {:keys [type message stack] :as body} :- [:map {:closed true}
+                                             [:type ::frontend-error-type]
+                                             [:message {:optional true} [:maybe :string]]
+                                             [:stack {:optional true} [:maybe :string]]]
    _req]
+  (when (or message stack)
+    (log/error "FRONTEND CRASH REPORT:" (pr-str body)))
   (analytics/inc! :metabase-frontend/errors {:type type})
   api/generic-204-no-content)
 

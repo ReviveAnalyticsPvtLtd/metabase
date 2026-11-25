@@ -8,6 +8,8 @@ import { DashboardInfoSidebar } from "./DashboardInfoSidebar";
 import { DashboardSettingsSidebar } from "./DashboardSettingsSidebar";
 import DashboardSubscriptionsSidebar from "./DashboardSubscriptionsSidebar";
 import { ParameterSidebar } from "./ParameterSidebar";
+import { PbiFiltersPane } from "./PbiDashboardPanes/PbiFiltersPane";
+import { PbiFormatPane } from "./PbiDashboardPanes/PbiFormatPane";
 
 export function DashboardSidebars() {
   const { isFullscreen, sidebar } = useDashboardContext();
@@ -23,6 +25,12 @@ export function DashboardSidebars() {
     }
     case SIDEBAR_NAME.clickBehavior:
       return <ClickBehaviorSidebar />;
+
+    case SIDEBAR_NAME.chartSettings:
+      return <PbiFormatPane />;
+
+    case SIDEBAR_NAME.filters:
+      return <PbiFiltersPane />;
 
     case SIDEBAR_NAME.editParameter:
       return <ParameterSidebar />;

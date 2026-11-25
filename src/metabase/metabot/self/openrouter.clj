@@ -9,6 +9,7 @@
   adapter converts those directly to Chat Completions messages."
   (:require
    [clojure.string :as str]
+   [medley.core :as m]
    [metabase.metabot.self.claude :as claude]
    [metabase.metabot.self.core :as core]
    [metabase.metabot.self.debug :as debug]
@@ -163,6 +164,7 @@
   ([] (list-models {}))
   ([opts]
    {:models (->> (list-all-models opts)
+                 (m/distinct-by :id)
                  (filter supported-model?)
                  (sort-by :id)
                  (mapv (fn [{:keys [id] :as model}]

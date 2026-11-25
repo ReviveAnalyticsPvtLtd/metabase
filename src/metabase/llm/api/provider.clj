@@ -8,6 +8,7 @@
    [clojure.core.cache :as cache]
    [clojure.core.cache.wrapped :as cache.wrapped]
    [clojure.string :as str]
+   [medley.core :as m]
    [metabase.api.common :as api]
    [metabase.api.macros :as api.macros]
    [metabase.llm.provider :as llm.provider]
@@ -195,7 +196,7 @@
                                                         proposed-model (assoc :proposed-model proposed-model)
                                                         probe?         (assoc :probe? true)))]
             (merge (select-keys listed [:learned-config])
-                   {:models (or config-models (vec (:models listed)))}))
+                   {:models (or config-models (vec (m/distinct-by :id (:models listed))))}))
           (catch clojure.lang.ExceptionInfo e
             (if (provider-client-error? e)
               ;; Keep offering config-models, otherwise admin has no way to select a different model to fix "model not

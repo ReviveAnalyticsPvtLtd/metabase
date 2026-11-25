@@ -187,7 +187,12 @@ const EntitySavedMessage = ({ value }: { value: EntitySavedValue }) => {
   }
 
   if (card == null) {
-    return null;
+    return (
+      <Flex align="center" gap="sm" c="text-secondary">
+        <Icon name="check" size={14} />
+        <Text c="text-secondary">{t`Chart saved`}</Text>
+      </Flex>
+    );
   }
 
   const target = container && (

@@ -16,8 +16,10 @@ import type {
 export type DashboardSidebarName =
   | "addQuestion"
   | "action"
+  | "chartSettings"
   | "clickBehavior"
   | "editParameter"
+  | "filters"
   | "settings"
   | "sharing"
   | "info";

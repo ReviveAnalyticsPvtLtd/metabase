@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { jt, t } from "ttag";
 
+import ErrorBoundary from "metabase/ErrorBoundary";
 import { ExternalLink } from "metabase/common/components/ExternalLink";
 import { Link } from "metabase/common/components/Link";
 import { LoadingAndErrorWrapper } from "metabase/common/components/LoadingAndErrorWrapper";
@@ -71,14 +72,20 @@ export function AISettingsPage() {
     >
       {areAiFeaturesEnabled && (
         <>
-          <AIProviderSettingsSection id={SETUP_SECTION_ID} />
+          <ErrorBoundary>
+            <AIProviderSettingsSection id={SETUP_SECTION_ID} />
+          </ErrorBoundary>
           <DisabledSection disabled={!isConfigured}>
-            <AIModelSettingsSection id={MODELS_SECTION_ID} />
-            <MetabotSettingsSection
-              hasEmbedding={hasEmbedding}
-              id={METABOT_SECTION_ID}
-              selectedMetabotId={selectedMetabotId}
-            />
+            <ErrorBoundary>
+              <AIModelSettingsSection id={MODELS_SECTION_ID} />
+            </ErrorBoundary>
+            <ErrorBoundary>
+              <MetabotSettingsSection
+                hasEmbedding={hasEmbedding}
+                id={METABOT_SECTION_ID}
+                selectedMetabotId={selectedMetabotId}
+              />
+            </ErrorBoundary>
           </DisabledSection>
           <Divider />
         </>
@@ -162,7 +169,7 @@ function MetabotSettingsSection({
   const shouldShowUpsell =
     !hasEmbedding && selectedMetabotId === FIXED_METABOT_IDS.EMBEDDED;
   const activeMetabot = !shouldShowUpsell
-    ? data?.items.find((m) => m.id === selectedMetabotId)
+    ? data?.items?.find((m) => m.id === selectedMetabotId)
     : null;
 
   return (

@@ -24,6 +24,15 @@ export const PERFORMANCE_MARKS = {
    * screen. Routes opt in, because only the route knows when it is done.
    */
   pageReady: "mb:page-ready",
+  reportRibbonMounted: "mb:report-ribbon-mounted",
+  analysisEditorMounted: "mb:analysis-editor-mounted",
+  analysisQueryReady: "mb:analysis-query-ready",
+  reportShellMounted: "mb:report-shell-mounted",
+  reportContentReady: "mb:report-content-ready",
+  crossFilterDispatched: "mb:cross-filter-dispatched",
+  crossFilterStateUpdated: "mb:cross-filter-state-updated",
+  aiActionStarted: "mb:ai-action-started",
+  aiActionCompleted: "mb:ai-action-completed",
 } as const;
 
 export type PerformanceMark =

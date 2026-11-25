@@ -161,6 +161,12 @@ const searchApp = () =>
     /* webpackChunkName: "search" */ "metabase/search/containers/SearchApp"
   ).then(({ SearchApp }) => ({ Component: SearchApp }));
 
+/** Power BI-style Workspaces landing page, part of the `pbi` experience. */
+const workspacesPage = () =>
+  import(
+    /* webpackChunkName: "workspaces" */ "metabase/collections/components/WorkspacesPage"
+  ).then(({ WorkspacesPage }) => ({ Component: WorkspacesPage }));
+
 const collectionLanding = () =>
   import(
     /* webpackChunkName: "collection" */ "metabase/collections/components/CollectionLanding"
@@ -292,6 +298,7 @@ export const getRoutes = (store: AppStore): RouteObject[] => [
               },
 
               { path: "search", lazy: searchApp },
+              { path: "workspaces", lazy: workspacesPage },
               // Send historical /archive route to trash - can remove in v52
               { path: "archive", element: redirect("../trash") },
               { path: "trash", lazy: trashCollectionLanding },

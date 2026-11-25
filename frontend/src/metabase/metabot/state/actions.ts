@@ -23,6 +23,7 @@ import { createAsyncThunk } from "metabase/redux/utils";
 import { navigate } from "metabase/router";
 import { getSetting } from "metabase/settings";
 import * as Urls from "metabase/urls";
+import { PERFORMANCE_MARKS, markOnce } from "metabase/utils/performance-marks";
 import { retry } from "metabase/utils/retry";
 import { uuid } from "metabase/utils/uuid";
 import type {
@@ -68,6 +69,42 @@ import type {
 } from "./types";
 import { createMessageId, parseSlashCommand } from "./utils";
 
+const inFlightSubmissions = new Set<string>();
+const inFlightRetries = new Set<string>();
+
+/**
+ * Claim the single submission slot for a conversation.
+ *
+ * The state flag (`isProcessing`) is only set once the request actually
+ * starts, so two handlers that run in the same tick - a double click, or a
+ * retry racing a submit - would both pass that check. This synchronous guard
+ * closes that window.
+ */
+function acquireSubmissionLock(conversationId: string): boolean {
+  if (inFlightSubmissions.has(conversationId)) {
+    return false;
+  }
+  inFlightSubmissions.add(conversationId);
+  markOnce(PERFORMANCE_MARKS.aiActionStarted);
+  return true;
+}
+
+function releaseSubmissionLock(conversationId: string): void {
+  inFlightSubmissions.delete(conversationId);
+}
+
+function acquireRetryLock(conversationId: string): boolean {
+  if (inFlightRetries.has(conversationId)) {
+    return false;
+  }
+  inFlightRetries.add(conversationId);
+  return true;
+}
+
+function releaseRetryLock(conversationId: string): void {
+  inFlightRetries.delete(conversationId);
+}
+
 export const {
   addAgentTextDelta,
   addAgentMessage,
@@ -109,17 +146,23 @@ type PollConversationTitleOptions = {
   dispatch: ThunkDispatch<State, unknown, UnknownAction>;
   getState: () => State;
   conversationId: string;
+  signal?: AbortSignal;
 };
 
 const pollConversationTitle = async ({
   dispatch,
   getState,
   conversationId,
+  signal,
 }: PollConversationTitleOptions) => {
   dispatch(setIsPollingForTitle({ conversationId, isPollingForTitle: true }));
   try {
     const title = await retry(
       async () => {
+        if (signal?.aborted) {
+          throw new Error("Title polling cancelled");
+        }
+
         const result = await dispatch(
           metabotApi.endpoints.getMetabotConversationTitle.initiate(
             conversationId,
@@ -135,7 +178,7 @@ const pollConversationTitle = async ({
       },
       {
         maxRetries: TITLE_POLL_MAX_ATTEMPTS - 1,
-        shouldRetry: (error) => error === TITLE_PENDING,
+        shouldRetry: (error) => error === TITLE_PENDING && !signal?.aborted,
         delayMs: () => TITLE_POLL_INTERVAL_MS,
       },
     ).catch(() => null);
@@ -354,9 +397,18 @@ export const submitInput = createAsyncThunk<
       return { prompt, success: true };
     }
 
+    if (inFlightSubmissions.has(conversationId)) {
+      console.error("Metabot is actively serving a request");
+      return { prompt, success: false, shouldRetry: false };
+    }
+
+    acquireSubmissionLock(conversationId);
+
     try {
-      if (getIsConversationProcessing(state, conversationId)) {
-        console.error("Metabot is actively serving a request");
+      if (
+        signal.aborted ||
+        getIsConversationProcessing(getState(), conversationId)
+      ) {
         return { prompt, success: false, shouldRetry: false };
       }
 
@@ -405,6 +457,10 @@ export const submitInput = createAsyncThunk<
         }),
       );
 
+      if (signal.aborted) {
+        return { prompt, success: false, shouldRetry: false };
+      }
+
       const sendMessageRequestPromise = dispatch(
         sendAgentRequest({
           ...data,
@@ -446,6 +502,9 @@ export const submitInput = createAsyncThunk<
         shouldRetry: true,
         error: { type: "message", message: METABOT_ERR_MSG.default },
       };
+    } finally {
+      markOnce(PERFORMANCE_MARKS.aiActionCompleted);
+      releaseSubmissionLock(conversationId);
     }
   },
 );
@@ -753,6 +812,7 @@ export const sendAgentRequest = createAsyncThunk<
           dispatch,
           getState,
           conversationId,
+          signal,
         });
       }
 
@@ -870,6 +930,13 @@ export const retryPrompt = createAsyncThunk<
   ) => {
     const state = getState();
 
+    if (
+      inFlightRetries.has(conversationId) ||
+      inFlightSubmissions.has(conversationId)
+    ) {
+      return { prompt: "", success: false, shouldRetry: false };
+    }
+
     const userTurn = getUserPromptMessage(state, conversationId, messageId);
     if (!userTurn) {
       throw new Error("Agent message was not proceeded by a user message");
@@ -877,6 +944,14 @@ export const retryPrompt = createAsyncThunk<
     const promptText = getPromptText(userTurn);
 
     if (getIsConversationProcessing(state, conversationId)) {
+      console.error("Metabot is actively serving a request");
+      return { prompt: promptText, success: false, shouldRetry: false };
+    }
+
+    // Two rapid retries (double click) would otherwise both rewind the
+    // conversation before either request starts. Keep a retry-specific lock so
+    // the retry can still hand off to the normal submission lock.
+    if (!acquireRetryLock(conversationId)) {
       console.error("Metabot is actively serving a request");
       return { prompt: promptText, success: false, shouldRetry: false };
     }
@@ -889,22 +964,26 @@ export const retryPrompt = createAsyncThunk<
         ? undefined
         : userTurn.externalId;
 
-    dispatch(rewindConversation({ conversationId, messageId: userTurn.id }));
-    dispatch(cancelInflightConversationRequests(conversationId));
+    try {
+      dispatch(rewindConversation({ conversationId, messageId: userTurn.id }));
+      dispatch(cancelInflightConversationRequests(conversationId));
 
-    return await dispatch(
-      submitInput({
-        conversationId,
-        type: "text",
-        message: promptText,
-        context,
-        metabot_id,
-        profile,
-        retryMessageId,
-        isTransformsPage,
-        isFullPageMetabot,
-      }),
-    ).unwrap();
+      return await dispatch(
+        submitInput({
+          conversationId,
+          type: "text",
+          message: promptText,
+          context,
+          metabot_id,
+          profile,
+          retryMessageId,
+          isTransformsPage,
+          isFullPageMetabot,
+        }),
+      ).unwrap();
+    } finally {
+      releaseRetryLock(conversationId);
+    }
   },
 );
 
@@ -923,8 +1002,9 @@ const assertConversationIsNotStreaming = (conversationId: string) => {
 
 export const fetchConversationSnapshot = createAsyncThunk(
   "metabase/metabot/fetchConversationSnapshot",
-  async (conversationId: string, { dispatch }) => {
+  async (conversationId: string, { dispatch, getState }) => {
     assertConversationIsNotStreaming(conversationId);
+    const messagesBeforeFetch = getMessages(getState(), conversationId);
 
     const { data: detail, error } = await dispatch(
       metabotApi.endpoints.getMetabotConversation.initiate(conversationId, {
@@ -941,6 +1021,16 @@ export const fetchConversationSnapshot = createAsyncThunk(
           message: t`Sorry, we couldn't load that conversation.`,
         }),
       );
+      return;
+    }
+
+    // A turn may start and finish while the snapshot request is in flight.
+    // Checking only the current streaming flag would allow that older response
+    // to erase the newer turn.
+    if (
+      getMessages(getState(), conversationId) !== messagesBeforeFetch ||
+      getIsConversationProcessing(getState(), conversationId)
+    ) {
       return;
     }
 

@@ -1,16 +1,21 @@
 import cx from "classnames";
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { t } from "ttag";
 
 import DashboardS from "metabase/css/dashboard.module.css";
 import { DashboardHeader } from "metabase/dashboard/components/DashboardHeader";
 import { useDashboardContext } from "metabase/dashboard/context";
-import { getIsHeaderVisible } from "metabase/dashboard/selectors";
+import {
+  getIsDashCardsLoadingComplete,
+  getIsHeaderVisible,
+} from "metabase/dashboard/selectors";
 import EmbedFrameS from "metabase/embedding/theme.module.css";
 import { isEmbeddingSdk } from "metabase/embedding-sdk/config";
+import { useNavigationExperience } from "metabase/nav/containers/PbiRail";
 import { useSelector } from "metabase/redux";
 import { FullWidthContainer } from "metabase/styled-components/layout/FullWidthContainer";
 import { Box, Flex, Loader } from "metabase/ui";
+import { PERFORMANCE_MARKS, markOnce } from "metabase/utils/performance-marks";
 import { DASHBOARD_PDF_EXPORT_ROOT_ID } from "metabase/visualizations/lib/save-dashboard-pdf";
 import type { DashboardCard } from "metabase-types/api";
 
@@ -34,10 +39,16 @@ import { useDashboardChartPaste } from "./use-dashboard-chart-paste";
 const DashboardDefaultView = ({ className }: { className?: string }) => {
   const { dashboard, isEditing, isFullscreen, isSharing, selectedTabId } =
     useDashboardContext();
+  const navigationExperience = useNavigationExperience();
+
+  useEffect(() => {
+    markOnce(PERFORMANCE_MARKS.reportShellMounted);
+  }, []);
 
   useDashboardChartPaste();
 
   const isHeaderVisible = useSelector(getIsHeaderVisible);
+  const areDashCardsLoaded = useSelector(getIsDashCardsLoadingComplete);
 
   const currentTabDashcards = useMemo(() => {
     if (!dashboard || !Array.isArray(dashboard.dashcards)) {
@@ -53,13 +64,19 @@ const DashboardDefaultView = ({ className }: { className?: string }) => {
 
   const tabHasCards = currentTabDashcards.length > 0;
   const dashboardHasCards = dashboard && dashboard.dashcards.length > 0;
+  const isEmpty = !dashboardHasCards || (dashboardHasCards && !tabHasCards);
+
+  useEffect(() => {
+    if (dashboard != null && areDashCardsLoaded && !isEmpty) {
+      markOnce(PERFORMANCE_MARKS.reportContentReady);
+    }
+  }, [areDashCardsLoaded, dashboard, isEmpty]);
 
   if (!dashboard) {
     return <Loader size="lg" label={t`Loading…`} />;
   }
 
-  const isEmpty = !dashboardHasCards || (dashboardHasCards && !tabHasCards);
-  const hasTabs = dashboard.tabs && dashboard.tabs.length > 1;
+  const hasTabs = dashboard?.tabs && dashboard.tabs.length > 1;
 
   // Embedding SDK has parent containers that requires dashboard to be full height to avoid double scrollbars.
   const isFullHeight = isEditing || isSharing || isEmbeddingSdk();
@@ -130,6 +147,24 @@ const DashboardDefaultView = ({ className }: { className?: string }) => {
 
         <DashboardSidebars />
       </Flex>
+
+      {navigationExperience === "pbi" && (
+        // Power BI experience: report "pages" render as tabs along the bottom
+        // of the canvas instead of under the header. The strip is explicitly
+        // full-width and its content anchored to the start edge, so no parent
+        // flex alignment can push the tab labels away from the left edge.
+        <Box
+          px="md"
+          pb="md"
+          w="100%"
+          style={{ alignSelf: "stretch" }}
+          data-testid="pbi-dashboard-page-tabs"
+        >
+          <Box w="100%">
+            <DashboardTabs />
+          </Box>
+        </Box>
+      )}
 
       <FilterApplyToast />
     </Flex>

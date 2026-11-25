@@ -36,6 +36,43 @@ import {
 } from "./utils";
 
 describe("metabot > convo state", () => {
+  it("ignores a snapshot that arrives after a newer local turn completed", async () => {
+    const { store } = setup();
+    const conversationId = testConversationId("omnibot");
+    const [pause] = createPauses(1);
+    const snapshotRequested = jest.fn();
+    fetchMock.get(
+      `path:/api/metabot/conversations/${conversationId}`,
+      async () => {
+        snapshotRequested();
+        await pause.promise;
+        return createMockMetabotConversationDetail({
+          conversation_id: conversationId,
+          messages: [createMockMetabotTextMessage("user", "old prompt")],
+        });
+      },
+    );
+    const snapshot = store.dispatch(fetchConversationSnapshot(conversationId));
+    try {
+      await waitFor(() => expect(snapshotRequested).toHaveBeenCalledTimes(1));
+      mockAgentEndpoint({ events: whoIsYourFavoriteResponse });
+      await enterChatMessage("new prompt");
+      await waitFor(() =>
+        expect(
+          getIsConversationProcessing(store.getState(), conversationId),
+        ).toBe(false),
+      );
+      const messages = getMessages(store.getState(), conversationId);
+      await act(async () => {
+        pause.resolve();
+        await snapshot.unwrap();
+      });
+      expect(getMessages(store.getState(), conversationId)).toEqual(messages);
+    } finally {
+      pause.resolve();
+    }
+  });
+
   it("should update the convo state on a successful request", async () => {
     const { store } = setup();
     const getConvoReqState = () =>

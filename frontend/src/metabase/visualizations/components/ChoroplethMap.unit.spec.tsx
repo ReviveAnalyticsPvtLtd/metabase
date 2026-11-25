@@ -46,6 +46,19 @@ describe("buildFeatureClickObject", () => {
     cardId: 42,
   };
 
+  it("preserves the raw dimension value for cross-filtering", () => {
+    const clickObject = buildFeatureClickObject(
+      [["CA", 10]],
+      null,
+      clickContext,
+    );
+
+    expect(clickObject.data[0]).toMatchObject({
+      value: "CA",
+      clickBehaviorValue: "CA",
+    });
+  });
+
   it("includes cardId and the row dimension for populated regions", () => {
     expect(
       buildFeatureClickObject([["CA", 10]], null, clickContext),
@@ -54,6 +67,26 @@ describe("buildFeatureClickObject", () => {
       value: 10,
       column: countColumn,
       dimensions: [{ value: "CA", column: stateColumn }],
+    });
+  });
+
+  it("supports empty regions with a normalized filter value", () => {
+    const clickObject = buildFeatureClickObject(
+      [],
+      {
+        type: "Feature",
+        properties: {},
+        geometry: { type: "Polygon", coordinates: [] },
+      },
+      {
+        ...clickContext,
+        getFeatureKey: () => "CA",
+      },
+    );
+
+    expect(clickObject).toMatchObject({
+      value: null,
+      data: [{ value: "CA", col: stateColumn }],
     });
   });
 

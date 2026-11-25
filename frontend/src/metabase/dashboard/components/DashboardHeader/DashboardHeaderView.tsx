@@ -21,6 +21,7 @@ import {
   getIsShowDashboardSettingsSidebar,
   getIsSidebarOpen,
 } from "metabase/dashboard/selectors";
+import { useNavigationExperience } from "metabase/nav/containers/PbiRail";
 import {
   PLUGIN_COLLECTION_COMPONENTS,
   PLUGIN_MODERATION,
@@ -72,6 +73,8 @@ export function DashboardHeaderView({
   const isDashboardHeaderVisible = useSelector(getIsHeaderVisible);
 
   const isAnalyticsDashboard = isInstanceAnalyticsCollection(collection);
+
+  const navigationExperience = useNavigationExperience();
 
   const handleResetFilters = useCallback(async () => {
     await dispatch(resetParameters());
@@ -179,15 +182,17 @@ export function DashboardHeaderView({
             </FixedWidthContainer>
           </FullWidthContainer>
         )}
-        <FullWidthContainer className={S.HeaderRow}>
-          <FixedWidthContainer
-            className={S.HeaderFixedWidthContainer}
-            data-testid="fixed-width-dashboard-tabs"
-            isFixedWidth={dashboard?.width === "fixed"}
-          >
-            <DashboardTabs />
-          </FixedWidthContainer>
-        </FullWidthContainer>
+        {navigationExperience !== "pbi" && (
+          <FullWidthContainer className={S.HeaderRow}>
+            <FixedWidthContainer
+              className={S.HeaderFixedWidthContainer}
+              data-testid="fixed-width-dashboard-tabs"
+              isFixedWidth={dashboard?.width === "fixed"}
+            >
+              <DashboardTabs />
+            </FixedWidthContainer>
+          </FullWidthContainer>
+        )}
       </div>
     </div>
   );

@@ -4,6 +4,8 @@ export type FrontendErrorType = "component-crash" | "chart-render-error";
 
 interface ReportFrontendErrorRequest {
   type: FrontendErrorType;
+  message?: string;
+  stack?: string;
 }
 
 export const frontendErrorsApi = Api.injectEndpoints({

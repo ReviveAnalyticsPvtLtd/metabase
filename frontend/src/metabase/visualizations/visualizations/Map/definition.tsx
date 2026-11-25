@@ -23,6 +23,7 @@ import {
   isMetric,
   isNumeric,
   isState,
+  isString,
 } from "metabase-lib/v1/types/utils/isa";
 import type { CustomGeoJSONMap } from "metabase-types/api";
 
@@ -122,11 +123,17 @@ export const MAP_VIZ_DEFINITION: VisualizationDefinition = {
             },
             value: "markers",
           },
+          {
+            get name() {
+              return t`Heatmap`;
+            },
+            value: "heat",
+          },
           { name: "Grid", value: "grid" },
         ],
       }),
       getDefault: ([{ data }], vizSettings) =>
-        vizSettings["map.type"] === "heat"
+        vizSettings["map.pin_type"] === "heat"
           ? "heat"
           : vizSettings["map.type"] === "grid"
             ? "grid"
@@ -246,7 +253,8 @@ export const MAP_VIZ_DEFINITION: VisualizationDefinition = {
       },
       widget: "number",
       getDefault: () => 30,
-      getHidden: (_series, vizSettings) => vizSettings["map.type"] !== "heat",
+      getHidden: (_series, vizSettings) =>
+        vizSettings["map.pin_type"] !== "heat",
     },
     "map.heat.blur": {
       get title() {
@@ -254,7 +262,8 @@ export const MAP_VIZ_DEFINITION: VisualizationDefinition = {
       },
       widget: "number",
       getDefault: () => 60,
-      getHidden: (_series, vizSettings) => vizSettings["map.type"] !== "heat",
+      getHidden: (_series, vizSettings) =>
+        vizSettings["map.pin_type"] !== "heat",
     },
     "map.heat.min-opacity": {
       get title() {
@@ -262,7 +271,8 @@ export const MAP_VIZ_DEFINITION: VisualizationDefinition = {
       },
       widget: "number",
       getDefault: () => 0,
-      getHidden: (_series, vizSettings) => vizSettings["map.type"] !== "heat",
+      getHidden: (_series, vizSettings) =>
+        vizSettings["map.pin_type"] !== "heat",
     },
     "map.heat.max-zoom": {
       get title() {
@@ -270,16 +280,31 @@ export const MAP_VIZ_DEFINITION: VisualizationDefinition = {
       },
       widget: "number",
       getDefault: () => 1,
-      getHidden: (_series, vizSettings) => vizSettings["map.type"] !== "heat",
+      getHidden: (_series, vizSettings) =>
+        vizSettings["map.pin_type"] !== "heat",
     },
   },
-  checkRenderable: (_series, settings) => {
+  checkRenderable: (series, settings) => {
     const type = settings["map.type"];
+    const columns = series[0]?.data.cols ?? [];
+    const findColumn = (name: unknown) =>
+      typeof name === "string" &&
+      columns.some((column) => column.name === name);
+    const latitudeColumn = columns.find(
+      (column) => column.name === settings["map.latitude_column"],
+    );
+    const longitudeColumn = columns.find(
+      (column) => column.name === settings["map.longitude_column"],
+    );
 
     if (isPinMapType(type)) {
       if (
-        !settings["map.longitude_column"] ||
-        !settings["map.latitude_column"]
+        !findColumn(settings["map.longitude_column"]) ||
+        !findColumn(settings["map.latitude_column"]) ||
+        !latitudeColumn ||
+        !longitudeColumn ||
+        !isNumeric(latitudeColumn) ||
+        !isNumeric(longitudeColumn)
       ) {
         throw new ChartSettingsError(
           t`Please select longitude and latitude columns in the chart settings.`,
@@ -292,7 +317,18 @@ export const MAP_VIZ_DEFINITION: VisualizationDefinition = {
           section: t`Data`,
         });
       }
-      if (!settings["map.dimension"] || !settings["map.metric"]) {
+      const dimensionColumn = columns.find(
+        (column) => column.name === settings["map.dimension"],
+      );
+      const metricColumn = columns.find(
+        (column) => column.name === settings["map.metric"],
+      );
+      if (
+        !dimensionColumn ||
+        !metricColumn ||
+        !isString(dimensionColumn) ||
+        !isMetric(metricColumn)
+      ) {
         throw new ChartSettingsError(
           t`Please select region and metric columns in the chart settings.`,
           { section: t`Data` },

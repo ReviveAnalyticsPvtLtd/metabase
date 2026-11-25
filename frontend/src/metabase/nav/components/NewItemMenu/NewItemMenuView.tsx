@@ -66,7 +66,7 @@ export const NewItemMenuView = ({
           })}
           leftSection={<Icon name="insight" />}
         >
-          {t`Question`}
+          {t`Analysis`}
         </Menu.Item>,
       );
     }

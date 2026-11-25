@@ -42,7 +42,7 @@ export const AiItem = ({ value, itemRef }: OnboardingItemProps) => {
       />
       <Text>
         {/* eslint-disable-next-line metabase/no-literal-metabase-strings -- "Metabase CLI" is a product name, not the instance name */}
-        {t`You can use AI to explore your data in ${applicationName} three ways: ask Metabot directly in the ${applicationName} app, connect external AI tools via the MCP server, or drive development workflows with AI using the Metabase CLI.`}
+        {t`You can use AI to explore your data in ${applicationName} three ways: ask Nubrix Bot directly in the ${applicationName} app, connect external AI tools via the MCP server, or drive development workflows with AI using the Metabase CLI.`}
       </Text>
     </ChecklistItem>
   );

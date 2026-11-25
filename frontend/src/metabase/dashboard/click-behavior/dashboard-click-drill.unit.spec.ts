@@ -316,4 +316,45 @@ describe("DashboardClickAction", () => {
 
     expect(actions).toHaveLength(0);
   });
+
+  it("prefers the report cross-filter callback when the dashboard provides one", () => {
+    const setReportCrossFilters = jest.fn();
+    const settings = buildSettings({
+      columns: {
+        CATEGORY: {
+          type: "crossfilter",
+          parameterMapping: {
+            category: {
+              id: "category",
+              source: { type: "column", id: "CATEGORY", name: "Category" },
+              target: { type: "parameter", id: "category" },
+            },
+          },
+        },
+      },
+    });
+
+    const actions = DashboardClickAction({
+      question: new Question(createMockCard()),
+      clicked: {
+        column: metricColumn,
+        dimensions: [{ column: dimensionColumn, value: "Gadget" }],
+        // The cast covers the injected dashboard-only callbacks this legacy
+        // drill object accepts through untyped extraData.
+        extraData: {
+          dashboard: {},
+          parameters: [],
+          setReportCrossFilters,
+        } as never,
+      },
+      settings,
+    });
+
+    const action =
+      actions[0] && "action" in actions[0] ? actions[0].action : null;
+    expect(action).toBeInstanceOf(Function);
+    // Executing the drill is what a user clicking the value triggers.
+    action?.();
+    expect(setReportCrossFilters).toHaveBeenCalledTimes(1);
+  });
 });

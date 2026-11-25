@@ -6,6 +6,7 @@ import {
   setOrUnsetParameterValues,
   setParameterValue,
 } from "metabase/dashboard/actions/parameters";
+import { getReportCrossFilters } from "metabase/dashboard/click-behavior/report-cross-filter";
 import {
   getDashCardById,
   getDashboardComplete,
@@ -15,6 +16,7 @@ import {
 } from "metabase/dashboard/selectors";
 import { useStore } from "metabase/redux";
 import type { State } from "metabase/redux/store";
+import { PERFORMANCE_MARKS, markOnce } from "metabase/utils/performance-marks";
 import type { ClickObject } from "metabase/visualizations/types";
 import type {
   CardId,
@@ -104,6 +106,16 @@ function createGetExtraDataForClick(
       userAttributes,
       setOrUnsetParameterValues,
       setParameterValue,
+      setReportCrossFilters: (clicked: ClickObject | null) => {
+        const pairs = getReportCrossFilters(clicked).map(
+          ({ parameterId, value }) => [parameterId, value],
+        );
+        if (pairs.length > 0) {
+          markOnce(PERFORMANCE_MARKS.crossFilterDispatched);
+          setOrUnsetParameterValues(pairs)(store.dispatch, store.getState);
+          markOnce(PERFORMANCE_MARKS.crossFilterStateUpdated);
+        }
+      },
     };
   };
 }

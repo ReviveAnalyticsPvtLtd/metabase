@@ -111,3 +111,9 @@ inline-ignore budget. If either ratchet file conflicts, run `./bin/merge-kondo-r
 ## Tool Preferences
 
 If `clojure-mcp` tools are available, prefer them over shell-based alternatives for Clojure development.
+
+## Nubrix / MicroStar Control Tower (`bin/nubrix/`)
+
+- **Authoritative Planner & Scripts:** `bin/nubrix/fulfillment_planner.py`, `adapters.py`, `domain_contract.py`, `poc_storage.py`, `run_snapshot_pipeline.py`, `what_if_simulator.py`, `grounded_ai.py`, `configure_control_tower.py`, and `verify_dashboard_native.mjs`.
+- **Verification:** Run `../.venv/bin/python -m unittest discover -s bin/nubrix -p "test_*.py" -v` for Python planner/AI/SQL tests and `bun run test-unit-keep-cljs frontend/src/metabase/visualizations/components/PinMap.unit.spec.tsx` for frontend map/XSS tests.
+- **Rules:** Keep the 7 source tables in Railway read-only; pass all credentials via env vars (never commit secrets); build production JS locally with `bun run build-release:js` and deploy `resources/frontend_client/app/dist/` + `resources/frontend_client/*.html` to the VPS.

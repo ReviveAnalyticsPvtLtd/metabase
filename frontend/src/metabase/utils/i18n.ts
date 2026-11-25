@@ -6,6 +6,11 @@ import { DAY_OF_WEEK_OPTIONS } from "metabase/utils/date-time";
 import MetabaseSettings from "metabase/utils/settings";
 import type { DayOfWeekId } from "metabase-types/api";
 
+import {
+  buildPowerBILocaleData,
+  supportsPowerBITerminology,
+} from "./i18n-terminology/pbi";
+
 export type LocaleDataWithLanguage = LocaleData & {
   headers: { language: string };
 };
@@ -158,7 +163,66 @@ if (window.MetabaseSiteLocalization) {
   addLocale(locale, translationsObject);
 }
 
+/**
+ * sessionStorage flag storing the experience the terminology pack was applied
+ * for. The app-shell sync hook (`usePowerBITerminologySync`) reloads the page
+ * once whenever the flag no longer matches the user's `navigation-experience`
+ * setting, mirroring the existing hard-reload flow for locale changes
+ * (`REFRESH_LOCALE`).
+ */
+const PBI_TERMINOLOGY_SESSION_KEY = "pbi-navigation-terminology";
+
+export function getPowerBITerminologyFlag(): string | undefined {
+  try {
+    return (
+      window.sessionStorage.getItem(PBI_TERMINOLOGY_SESSION_KEY) ?? undefined
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+export function setPowerBITerminologyFlag(experience: string): void {
+  try {
+    window.sessionStorage.setItem(PBI_TERMINOLOGY_SESSION_KEY, experience);
+  } catch {
+    // private mode firewalls — terminology falls back to the plain locale
+  }
+}
+
+/**
+ * Registers (activates) the Power BI terminology pseudo-locale ("en-pbi").
+ *
+ * Returns `true` when the pack was applied. The overrides are English, so the
+ * pack is skipped for non-English locales — ttag then falls back to the real
+ * catalogue previously installed, exactly as if the app were untouched.
+ */
+export function applyPowerBITerminology(language?: string): boolean {
+  if (!supportsPowerBITerminology(language)) {
+    console.warn(
+      `Skipping Power BI terminology for non-English locale "${language}"`,
+    );
+    return false;
+  }
+
+  applyTerminologyLocale(buildPowerBILocaleData());
+  return true;
+}
+
+function applyTerminologyLocale(
+  translationsObject: LocaleDataWithLanguage,
+): void {
+  // NOTE: bypasses setLocalization on purpose — the pseudo-locale must not
+  // touch dayjs, start-of-week, or addMsgIds semantics of the real catalogue.
+  addLocale(translationsObject.headers.language, translationsObject);
+  // eslint-disable-next-line react-hooks/rules-of-hooks -- same ttag call as setLanguage above
+  useLocale(translationsObject.headers.language);
+}
+
 // set the initial localization to user locale
 if (window.MetabaseUserLocalization) {
   setLocalization(window.MetabaseUserLocalization);
+  if (getPowerBITerminologyFlag() === "pbi") {
+    applyPowerBITerminology(window.MetabaseUserLocalization.headers.language);
+  }
 }

@@ -53,7 +53,7 @@ describe("DashboardHeader - enterprise", () => {
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /info/i })).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: /fullscreen/i }),
+      screen.getByRole("button", { name: "Enter Fullscreen" }),
     ).toBeInTheDocument();
 
     expect(

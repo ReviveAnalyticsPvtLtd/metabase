@@ -35,6 +35,7 @@ import { getUserId } from "metabase/current-user";
 import { registerDashboardVisualizations } from "metabase/dashboard/visualizations/register";
 import { initializeInteractiveEmbedding } from "metabase/embedding/interactive-embedding";
 import { MetabotProvider } from "metabase/metabot/context";
+import { usePowerBITerminologySync } from "metabase/nav/containers/PbiRail/use-terminology-sync";
 import { PLUGIN_APP_INIT_FUNCTIONS } from "metabase/plugins";
 import { MetabaseReduxProvider } from "metabase/redux";
 import {
@@ -75,6 +76,11 @@ function AppMountedMark() {
   useLayoutEffect(() => {
     markOnce(PERFORMANCE_MARKS.appMounted);
   }, []);
+  return null;
+}
+
+function PowerBITerminologySync() {
+  usePowerBITerminologySync();
   return null;
 }
 
@@ -130,6 +136,7 @@ function _init(
   root.render(
     <MetabaseReduxProvider store={store}>
       <AppMountedMark />
+      <PowerBITerminologySync />
       <EmotionCacheProvider>
         <DragDropContextProvider backend={ModifiedBackend} context={{ window }}>
           <OverlayStackProvider>

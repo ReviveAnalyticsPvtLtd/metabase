@@ -393,6 +393,8 @@ export type SessionCookieSameSite = "lax" | "strict" | "none";
 
 export type MfaEnforcement = "off" | "optional" | "required";
 
+export type NavigationExperience = "classic" | "pbi";
+
 export interface SettingDefinition<
   Key extends EnterpriseSettingKey = EnterpriseSettingKey,
 > {
@@ -680,6 +682,7 @@ export type UserSettings = {
   "expand-bookmarks-in-nav"?: boolean;
   "expand-collections-in-nav"?: boolean;
   "expand-library-in-nav"?: boolean;
+  "navigation-experience"?: NavigationExperience;
   "browse-filter-only-verified-models"?: boolean;
   "browse-filter-only-verified-metrics"?: boolean;
   "show-updated-permission-modal": boolean;

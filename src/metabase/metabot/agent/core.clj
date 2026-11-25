@@ -518,6 +518,8 @@
    :rf         rf
    :result     init
    :iteration  1
+   :streak     0
+   :failed-tools #{}
    :status     :continue
    :usage-atom usage-atom})
 
@@ -554,6 +556,27 @@
                                (get model)))
              part)))))
 
+(defn- tool-loop-progress
+  [loop-state parts]
+  (let [inputs (into {} (keep (fn [{:keys [type id function arguments]}]
+                                (when (= :tool-input type)
+                                  [id [function arguments]]))) parts)]
+    (reduce (fn [{:keys [streak failed-tools] :as progress} part]
+              (if-let [signature (and (= :tool-output (:type part)) (get inputs (:id part)))]
+                (if (or (:error part)
+                        (and (get-in part [:result :output])
+                             (not (successful-tool-output? part))))
+                  (assoc progress
+                         :streak (inc streak)
+                         :failed-tools (conj failed-tools signature)
+                         :stalled? (or (:stalled? progress)
+                                       (contains? failed-tools signature)
+                                       (>= (inc streak) 2)))
+                  (assoc progress :streak 0))
+                progress))
+            (select-keys loop-state [:streak :failed-tools])
+            parts)))
+
 (defn- loop-step
   "Execute one iteration of the agent loop. Returns next loop state.
 
@@ -565,7 +588,7 @@
     (let [{:keys [profile tools context memory-atom tracking-opts]} agent
           max-iter           (:max-iterations profile 15)
           terminal-tools     (set (:terminal-tools profile))
-          tracking-opts      (assoc tracking-opts :iteration iteration)
+          tracking-opts      (assoc tracking-opts :iteration iteration :failed-tools (:failed-tools loop-state))
           memory             @memory-atom
           parts-atom         (atom [])
           link-registry-atom (atom (get-in memory [:state :link-registry] {}))
@@ -587,7 +610,9 @@
                                                  ;; preserve data parts (e.g. generated_entity) emitted this iteration
                                                  :ai/data-parts  (filterv #(= :data (:type %)) @parts-atom)}))
                                  reduced-result))
-          parts              @parts-atom]
+          parts              @parts-atom
+          progress           (tool-loop-progress loop-state parts)
+          next-loop-state    (merge loop-state progress)]
       ;; Sync link registry back to memory after streaming completes
       (swap! memory-atom memory/set-link-registry @link-registry-atom)
       ;; Capture response for debug log
@@ -600,38 +625,38 @@
       (log/debug "Iteration" {:n iteration :parts-count (count parts)})
       (if (empty? parts)
         ;; LLM returned nothing this iteration — a natural stop, surfaced for the turn span.
-        (assoc loop-state :status :done :finish-reason :empty-response
+        (assoc next-loop-state :status :done :finish-reason :empty-response
                :result (rf result (final-state-part @memory-atom)))
         (do
           (log/debug "Got parts" {:count (count parts) :types (mapv :type parts)})
           (swap! memory-atom update-memory parts)
-          ;; these profiles cannot answer in text, so a denial would otherwise loop to max-iterations
-          (let [terminal-error (when (:required-tool-call? profile)
-                                 (terminal-error-message parts))]
+          (let [terminal-error (or (terminal-error-message parts)
+                                   (when (:stalled? progress)
+                                     "I couldn’t complete the request after trying to recover. Try narrowing the question and send it again."))]
             (cond
               (reduced? result')
               ;; consumer signalled early termination (e.g. client disconnect / cancellation)
-              (assoc loop-state :status :reduced :finish-reason :reduced :result @result')
+              (assoc next-loop-state :status :reduced :finish-reason :reduced :result @result')
 
               terminal-error
               (let [result'' (rf result' (terminal-error-text-part terminal-error))]
                 (if (reduced? result'')
-                  (assoc loop-state :status :reduced :finish-reason :reduced :result @result'')
+                  (assoc next-loop-state :status :reduced :finish-reason :reduced :result @result'')
                   (do (log/info "Agent loop complete" {:iterations iteration :reason :terminal-error})
-                      (assoc loop-state
+                      (assoc next-loop-state
                              :status :done
                              :finish-reason :terminal-error
                              :result (rf result'' (final-state-part @memory-atom))))))
 
               (should-continue? iteration max-iter terminal-tools parts)
-              (assoc loop-state :result result' :iteration (inc iteration))
+              (assoc next-loop-state :result result' :iteration (inc iteration))
 
               :else
               (let [reason (finish-reason iteration max-iter terminal-tools parts)]
                 (if (= reason :length)
                   (log/warn "Agent loop complete" {:iterations iteration :reason reason})
                   (log/info "Agent loop complete" {:iterations iteration :reason reason}))
-                (assoc loop-state
+                (assoc next-loop-state
                        :status :done
                        ;; surfaced so run-agent-loop can record it on the turn span
                        :finish-reason reason

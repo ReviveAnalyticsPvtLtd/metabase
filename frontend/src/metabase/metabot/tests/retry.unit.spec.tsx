@@ -64,6 +64,52 @@ const turnEvents = ({
 ];
 
 describe("metabot > retry", () => {
+  it("coalesces rapid retries without rewinding twice or rejecting the duplicate", async () => {
+    const { store } = setup();
+    const conversationId = conversationIdForAgent(store, "omnibot");
+    mockAgentEndpoint({ events: whoIsYourFavoriteResponse });
+    await act(async () => {
+      await store.dispatch(
+        submitInput({
+          conversationId,
+          context: emptyContext,
+          type: "text",
+          message: "hello",
+        }),
+      );
+    });
+    const message = checkNotNull(
+      getMessages(store.getState(), conversationId).at(-1),
+    );
+    const [pause] = createPauses(1);
+    const agentSpy = mockAgentEndpoint({
+      stream: createMockSSEStream(
+        (async function* () {
+          await pause.promise;
+          yield { type: "finish", finishReason: "stop" };
+        })(),
+      ),
+    });
+    agentSpy.mockClear();
+    try {
+      await act(async () => {
+        const payload = {
+          conversationId,
+          messageId: message.id,
+          context: emptyContext,
+        };
+        const first = store.dispatch(retryPrompt(payload));
+        const second = await store.dispatch(retryPrompt(payload)).unwrap();
+        expect(second).toMatchObject({ success: false, shouldRetry: false });
+        pause.resolve();
+        expect(await first.unwrap()).toMatchObject({ success: true });
+      });
+      expect(agentSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      pause.resolve();
+    }
+  });
+
   it("should present the user an option to retry a response", async () => {
     setup();
     mockAgentEndpoint({ events: whoIsYourFavoriteResponse });

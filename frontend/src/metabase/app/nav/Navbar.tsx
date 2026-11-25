@@ -5,6 +5,10 @@ import { getUser } from "metabase/current-user";
 import { getDashboard } from "metabase/dashboard/shell-selectors";
 import { AdminNavbar } from "metabase/nav/components/AdminNavbar";
 import { MainNavbar } from "metabase/nav/containers/MainNavbar";
+import {
+  PbiRail,
+  useNavigationExperience,
+} from "metabase/nav/containers/PbiRail";
 import { connect } from "metabase/redux";
 import type { AdminPath, State, StoreDashboard } from "metabase/redux/store";
 import { useLocation, useParams } from "metabase/router";
@@ -37,6 +41,7 @@ function NavbarInner({ isOpen, user, adminPaths, dashboard }: NavbarProps) {
     () => location.pathname.startsWith("/admin/"),
     [location.pathname],
   );
+  const navigationExperience = useNavigationExperience();
 
   if (!user) {
     return null;
@@ -44,6 +49,8 @@ function NavbarInner({ isOpen, user, adminPaths, dashboard }: NavbarProps) {
 
   return isAdminApp ? (
     <AdminNavbar path={location.pathname} adminPaths={adminPaths} />
+  ) : navigationExperience === "pbi" ? (
+    <PbiRail isOpen={isOpen} />
   ) : (
     <MainNavbar
       isOpen={isOpen}

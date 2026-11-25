@@ -812,7 +812,8 @@
   - At completion, waits for all tools and appends results
 
   Tools can return: plain values, IReduceInit (reducible), or channels (legacy)."
-  [tools]
+  ([tools] (tool-executor-xf tools nil))
+  ([tools failed-tools]
   (fn [rf]
     (let [active (volatile! {})] ;; tool-call-id -> {:chunks [...]} or {:task derefable}
       (fn
@@ -839,12 +840,18 @@
            :tool-input-available
            (when-let [{:keys [chunks]} (get @active toolCallId)]
              (let [tool (get tools toolName)
-                   task (submit-virtual (bound-fn* #(run-tool toolCallId toolName tool chunks)))]
+                   task (if (and (seq failed-tools)
+                                 (contains? failed-tools [toolName (:arguments (into {} (aisdk-xf) chunks))]))
+                          (delay [{:type       :tool-output-available
+                                   :toolCallId toolCallId
+                                   :toolName   toolName
+                                   :error      {:message "An identical tool request already failed this turn."}}])
+                          (submit-virtual (bound-fn* #(run-tool toolCallId toolName tool chunks))))]
                (vswap! active assoc toolCallId {:task task})))
 
            ;; otherwise: do nothing
            nil)
-         (rf result chunk))))))
+         (rf result chunk)))))))
 
 (def ^:private max-body-preview-chars
   "Cap on the body snippet spliced into provider error messages."

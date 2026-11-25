@@ -9,8 +9,10 @@ export const SIDEBAR_NAME: Record<DashboardSidebarName, DashboardSidebarName> =
   {
     addQuestion: "addQuestion",
     action: "action",
+    chartSettings: "chartSettings",
     clickBehavior: "clickBehavior",
     editParameter: "editParameter",
+    filters: "filters",
     sharing: "sharing",
     settings: "settings",
     info: "info",

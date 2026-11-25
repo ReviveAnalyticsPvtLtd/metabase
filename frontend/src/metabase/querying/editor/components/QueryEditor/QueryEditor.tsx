@@ -1,10 +1,12 @@
 import { useElementSize } from "@mantine/hooks";
 import type { ComponentType, ReactNode } from "react";
+import { useEffect } from "react";
 import { t } from "ttag";
 
 import { LoadingAndErrorWrapper } from "metabase/common/components/LoadingAndErrorWrapper";
 import { NativeQueryPreview } from "metabase/querying/notebook/components/NativeQueryPreview";
 import { Center, Flex, Modal } from "metabase/ui";
+import { PERFORMANCE_MARKS, markOnce } from "metabase/utils/performance-marks";
 import type * as Lib from "metabase-lib";
 import type { DatasetQuery } from "metabase-types/api";
 
@@ -60,6 +62,10 @@ export function QueryEditor({
   parametersList,
   templateTagsSidebar,
 }: QueryEditorProps) {
+  useEffect(() => {
+    markOnce(PERFORMANCE_MARKS.analysisEditorMounted);
+  }, []);
+
   const {
     question,
     proposedQuestion,
@@ -99,6 +105,12 @@ export function QueryEditor({
   });
 
   const { ref, height: availableHeight } = useElementSize();
+
+  useEffect(() => {
+    if (result != null && !isRunning) {
+      markOnce(PERFORMANCE_MARKS.analysisQueryReady);
+    }
+  }, [isRunning, result]);
 
   if (isLoading || error != null) {
     return (

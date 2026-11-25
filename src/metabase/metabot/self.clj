@@ -513,7 +513,7 @@
                                      tool-choice)           (assoc :tool_choice tool-choice)
                                 (:session-id tracking-opts) (assoc :prompt-cache-key (:session-id tracking-opts)))
                make-source    (fn []
-                                (eduction (comp (core/tool-executor-xf tools)
+                                (eduction (comp (core/tool-executor-xf tools (:failed-tools tracking-opts))
                                                 (core/lite-aisdk-xf)
                                                 (core/stamp-tool-titles-xf tools)
                                                 (report-aisdk-errors-xf tracking-opts)

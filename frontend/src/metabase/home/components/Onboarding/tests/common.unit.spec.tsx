@@ -197,7 +197,7 @@ describe("Onboarding", () => {
 
       const aiItem = getItem("ai");
       expect(
-        within(aiItem).getByText(/ask Metabot directly in the Metabase app/),
+        within(aiItem).getByText(/ask Nubrix Bot directly in the Metabase app/),
       ).toBeInTheDocument();
 
       const cta = within(screen.getByTestId("ai-cta"));

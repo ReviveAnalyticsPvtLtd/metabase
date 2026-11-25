@@ -95,6 +95,16 @@
   :type       :boolean
   :default    true)
 
+(defsetting navigation-experience
+  (deferred-tru "Which navigation experience the user sees: ''classic'' or ''pbi'' (the Power BI-style rail).")
+  :user-local :only
+  :export?    false
+  :visibility :authenticated
+  :type       :string
+  :default    "pbi"
+  ;; a UI preference, not a secret — stored in plaintext (required explicitly for string settings)
+  :encryption :no)
+
 (defsetting browse-filter-only-verified-models
   (deferred-tru "User preference for whether the ''Browse models'' page should be filtered to show only verified models.")
   :user-local :only

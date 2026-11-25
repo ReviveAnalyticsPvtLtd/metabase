@@ -370,7 +370,7 @@ function QueryBuilderInner(props: QueryBuilderInnerProps) {
     (bookmark) => bookmark.type === "card" && bookmark.item_id === card?.id,
   );
 
-  usePageTitleWithLoadingTime(documentTitle || card?.name || t`Question`, {
+  usePageTitleWithLoadingTime(documentTitle || card?.name || t`Analysis`, {
     titleIndex: 1,
     startTime: queryStartTime,
     isRunning: uiControls.isRunning,

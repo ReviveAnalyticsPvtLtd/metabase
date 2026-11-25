@@ -611,7 +611,7 @@ describe("QueryBuilder - unsaved changes warning", () => {
         within(saveQuestionModal).getByPlaceholderText(
           "What is the name of your question?",
         ),
-        "New question",
+        "New analysis",
       );
       expect(screen.getByTestId("save-question-modal")).toBeInTheDocument();
       await userEvent.click(within(saveQuestionModal).getByText("Save"));
@@ -766,7 +766,7 @@ describe("QueryBuilder - unsaved changes warning", () => {
         within(saveQuestionModal).getByPlaceholderText(
           "What is the name of your question?",
         ),
-        "New question",
+        "New analysis",
       );
       expect(screen.getByTestId("save-question-modal")).toBeInTheDocument();
       await userEvent.click(within(saveQuestionModal).getByText("Save"));

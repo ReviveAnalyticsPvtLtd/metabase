@@ -50,7 +50,7 @@ export function AdHocQuestionLeftSide(
           c="text-secondary"
         >
           {isNative ? (
-            t`New question`
+            t`New analysis`
           ) : (
             <QuestionDescription
               question={question}

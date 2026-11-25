@@ -4,13 +4,46 @@ import {
   isNumeric,
   isString,
 } from "metabase-lib/v1/types/utils/isa";
-import type { DatasetColumn, DatasetData } from "metabase-types/api";
+import type {
+  DatasetColumn,
+  DatasetData,
+  VisualizationSettings,
+} from "metabase-types/api";
 
 export const PIN_MAP_VALUES = ["pin", "heat", "grid"] as const;
 export type PinMapValue = (typeof PIN_MAP_VALUES)[number];
 
 export function isPinMapType(value: unknown): value is PinMapValue {
   return PIN_MAP_VALUES.some((v) => v === value);
+}
+
+export function normalizeMapSettings(
+  settings: VisualizationSettings,
+): VisualizationSettings {
+  const type = settings["map.type"];
+  const pinType = settings["map.pin_type"];
+
+  if (type === "grid") {
+    return { ...settings, "map.type": "grid", "map.pin_type": "grid" };
+  }
+
+  if (type === "heat") {
+    return { ...settings, "map.type": "pin", "map.pin_type": "heat" };
+  }
+
+  if (type === "pin" && pinType === "grid") {
+    return { ...settings, "map.type": "grid" };
+  }
+
+  if (isPinMapType(type)) {
+    return {
+      ...settings,
+      "map.type": "pin",
+      "map.pin_type": pinType ?? "markers",
+    };
+  }
+
+  return settings;
 }
 
 const isValidCoordinatesColumn = (column: DatasetColumn | undefined) =>

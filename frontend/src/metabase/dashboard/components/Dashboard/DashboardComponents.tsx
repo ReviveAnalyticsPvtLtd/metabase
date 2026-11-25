@@ -4,7 +4,7 @@ import { Box, type BoxProps } from "metabase/ui";
 
 import S from "./Dashboard.module.css";
 
-export const FIXED_WIDTH = "1048px";
+export const FIXED_WIDTH = "min(1820px, calc(100vw - 48px))";
 export const FixedWidthContainer = (
   props: BoxProps & {
     isFixedWidth: boolean;

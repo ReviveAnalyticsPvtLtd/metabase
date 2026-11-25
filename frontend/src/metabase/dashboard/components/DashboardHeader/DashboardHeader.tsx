@@ -10,6 +10,7 @@ import {
   fetchDashboard,
   setSidebar,
 } from "metabase/dashboard/actions";
+import { PbiReportRibbon } from "metabase/dashboard/components/PbiReportRibbon/PbiReportRibbon";
 import { useDashboardContext } from "metabase/dashboard/context";
 import {
   getIsAdditionalInfoVisible,
@@ -133,6 +134,10 @@ export const DashboardHeaderInner = ({ dashboard }: DashboardHeaderProps) => {
 
   return (
     <>
+      <PbiReportRibbon
+        dashboard={dashboard}
+        onCancelEditing={onRequestCancel}
+      />
       <DashboardHeaderView
         dashboard={dashboard}
         collection={collection}

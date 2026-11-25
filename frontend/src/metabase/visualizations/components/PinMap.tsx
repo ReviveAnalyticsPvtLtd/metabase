@@ -10,6 +10,7 @@ import DashboardS from "metabase/css/dashboard.module.css";
 import { useQuestionFromCard } from "metabase/metadata-store";
 import { Button } from "metabase/ui";
 import type { VisualizationProps } from "metabase/visualizations/types";
+import { normalizeMapSettings } from "metabase/visualizations/visualizations/Map/utils";
 import { sumMetric, unaggregatedDataWarningMap } from "metabase/viz-core";
 import type {
   DatasetData,
@@ -39,6 +40,7 @@ const MAP_COMPONENTS_BY_TYPE = {
   markers: LeafletMarkerPinMap,
   tiles: LeafletTilePinMap,
   grid: LeafletGridHeatMap,
+  heat: LeafletGridHeatMap,
 } as Partial<Record<PinMapStyle, ComponentClass<PinMapChildProps>>>;
 
 export type PinMapPoint = LeafletMapPoint<[number | null]>;
@@ -109,14 +111,16 @@ export function getPoints({
     metricIndex >= 0 ? row[metricIndex] : 1,
   ]);
 
-  // only use points with numeric coordinates & metric
-  const validPoints = allPoints.map(([lat, lng, metric]) => {
-    if (isPinMap) {
-      return lat != null && lng != null;
-    }
-
-    return lat != null && lng != null && metric != null;
-  });
+  const validPoints = allPoints.map(
+    ([lat, lng, metric]) =>
+      typeof lat === "number" &&
+      Number.isFinite(lat) &&
+      Math.abs(lat) <= 90 &&
+      typeof lng === "number" &&
+      Number.isFinite(lng) &&
+      Math.abs(lng) <= 180 &&
+      (isPinMap || (typeof metric === "number" && Number.isFinite(metric))),
+  );
   const validRowPoints = allPoints.filter(
     (_point, i): _point is PinMapPoint => validPoints[i],
   );
@@ -129,8 +133,17 @@ export function getPoints({
   const warnings: string[] = [];
   const filteredRows = allPoints.length - validRowPoints.length;
   if (filteredRows > 0) {
+    const hasInvalidNonNullValues = allPoints.some(
+      ([lat, lng, metric], index) =>
+        !validPoints[index] &&
+        lat != null &&
+        lng != null &&
+        (isPinMap || metric != null),
+    );
     warnings.push(
-      t`We filtered out ${filteredRows} row(s) containing null values.`,
+      hasInvalidNonNullValues
+        ? t`We filtered out ${filteredRows} row(s) containing missing or invalid map values.`
+        : t`We filtered out ${filteredRows} row(s) containing null values.`,
     );
   }
   const hasAggregatedPoints = points.length < validRowPoints.length;
@@ -179,9 +192,9 @@ type PinMapChildProps = LeafletMapProps<PinMapPoint> & {
 
 export function PinMap(props: PinMapProps) {
   const buildQuestion = useQuestionFromCard();
+  const normalizedSettings = normalizeMapSettings(props.settings);
   const {
     className,
-    settings,
     series,
     isEditing,
     isDashboard,
@@ -190,6 +203,7 @@ export function PinMap(props: PinMapProps) {
     onUpdateVisualizationSettings,
     onRenderError,
   } = props;
+  const settings = normalizedSettings;
 
   const [lat, setLat] = useState<number | null>(null);
   const [lng, setLng] = useState<number | null>(null);
@@ -203,17 +217,16 @@ export function PinMap(props: PinMapProps) {
     longitudeColumnName: settings["map.longitude_column"],
     metricColumnName: settings["map.metric_column"],
     isGridMap: settings["map.pin_type"] === "grid",
+    isPinMap:
+      settings["map.type"] === "pin" && settings["map.pin_type"] !== "heat",
   };
-  const isPinMap = settings["map.type"] === "pin";
 
   // A new points identity makes LeafletMap refit the viewport to the data
   // bounds, so points must be recomputed only when the data, the mapped
-  // columns or the grid aggregation change; `map.type` is read at recompute
-  // time but must not trigger one, hence state adjusted during render instead
-  // of useMemo.
+  // columns or the aggregation/metric requirements change.
   const [pointsCache, setPointsCache] = useState(() => ({
     inputs: pointsInputs,
-    result: getPoints({ ...pointsInputs, isPinMap }),
+    result: getPoints(pointsInputs),
   }));
   const { inputs } = pointsCache;
   if (
@@ -221,11 +234,12 @@ export function PinMap(props: PinMapProps) {
     inputs.latitudeColumnName !== pointsInputs.latitudeColumnName ||
     inputs.longitudeColumnName !== pointsInputs.longitudeColumnName ||
     inputs.metricColumnName !== pointsInputs.metricColumnName ||
-    inputs.isGridMap !== pointsInputs.isGridMap
+    inputs.isGridMap !== pointsInputs.isGridMap ||
+    inputs.isPinMap !== pointsInputs.isPinMap
   ) {
     setPointsCache({
       inputs: pointsInputs,
-      result: getPoints({ ...pointsInputs, isPinMap }),
+      result: getPoints(pointsInputs),
     });
   }
   const { rows, points, bounds, min, max, warnings } = pointsCache.result;
@@ -279,8 +293,18 @@ export function PinMap(props: PinMapProps) {
   const pinType = settings["map.pin_type"];
   const MapComponent = pinType ? MAP_COMPONENTS_BY_TYPE[pinType] : undefined;
 
-  const mapProps = { ...props };
-  mapProps.series[0].data.rows = rows;
+  const mapProps = {
+    ...props,
+    settings,
+    series: series.map((entry, index) =>
+      index === 0
+        ? {
+            ...entry,
+            data: { ...entry.data, rows },
+          }
+        : entry,
+    ),
+  };
 
   // For static embedding we hide the button
   const shouldShowDefaultViewChangeButton =

@@ -1,5 +1,5 @@
 import { isFulfilled } from "@reduxjs/toolkit";
-import { useCallback } from "react";
+import { useCallback, useEffect, useRef } from "react";
 
 import { useMetabotContext } from "metabase/metabot";
 import { useDispatch, useSelector } from "metabase/redux";
@@ -44,6 +44,13 @@ export type SubmitInputOptions = {
  */
 export const useMetabotConversation = (conversationId: string) => {
   const dispatch = useDispatch();
+  const contextAbortController = useRef<AbortController | null>(null);
+  useEffect(() => {
+    return () => {
+      contextAbortController.current?.abort();
+      contextAbortController.current = null;
+    };
+  }, [conversationId]);
   const { prompt, setPrompt, promptInputRef, getChatContext } =
     useMetabotContext();
 
@@ -57,6 +64,9 @@ export const useMetabotConversation = (conversationId: string) => {
 
   const metabotRequestId = useSelector((state) =>
     getMetabotRequestId(state, conversationId),
+  );
+  const isDoingScience = useSelector((state) =>
+    getIsConversationProcessing(state, conversationId),
   );
 
   const prepareRetryIfUnsuccesful = useCallback(
@@ -81,6 +91,18 @@ export const useMetabotConversation = (conversationId: string) => {
       prompt: string | Omit<MetabotUserChatMessage, "id" | "role">,
       options?: SubmitInputOptions,
     ) => {
+      // One conversation may have only one active turn. Blocking duplicate
+      // submits here prevents double-clicks and re-rendered handlers from
+      // starting competing streams, which can otherwise look like an agent
+      // loop and leave the conversation in an indeterminate state.
+      if (isDoingScience) {
+        return;
+      }
+
+      contextAbortController.current?.abort();
+      const contextController = new AbortController();
+      contextAbortController.current = contextController;
+
       setPrompt("");
       options?.onBeforeSubmit?.();
 
@@ -88,12 +110,17 @@ export const useMetabotConversation = (conversationId: string) => {
         promptInputRef?.current?.focus();
       }
 
+      const context = await getChatContext(contextController.signal);
+      if (contextController.signal.aborted) {
+        return;
+      }
+
       const action = await dispatch(
         submitInputAction({
           ...(typeof prompt === "string"
             ? { type: "text", message: prompt }
             : prompt),
-          context: await getChatContext(),
+          context,
           conversationId,
           metabot_id: metabotRequestId,
           profile: options?.profile,
@@ -101,6 +128,10 @@ export const useMetabotConversation = (conversationId: string) => {
           isFullPageMetabot,
         }),
       );
+
+      if (contextAbortController.current === contextController) {
+        contextAbortController.current = null;
+      }
 
       trackMetabotRequestSent();
 
@@ -120,12 +151,24 @@ export const useMetabotConversation = (conversationId: string) => {
       setPrompt,
       isTransformsPage,
       isFullPageMetabot,
+      isDoingScience,
     ],
   );
 
   const retryMessage = useCallback(
     async (messageId: string, options?: { profile?: MetabotProfileId }) => {
-      const context = await getChatContext();
+      if (isDoingScience) {
+        return;
+      }
+
+      contextAbortController.current?.abort();
+      const contextController = new AbortController();
+      contextAbortController.current = contextController;
+      const context = await getChatContext(contextController.signal);
+      if (contextController.signal.aborted) {
+        return;
+      }
+
       const action = await dispatch(
         retryPrompt({
           messageId,
@@ -137,6 +180,9 @@ export const useMetabotConversation = (conversationId: string) => {
           isFullPageMetabot,
         }),
       );
+      if (contextAbortController.current === contextController) {
+        contextAbortController.current = null;
+      }
       if (isFulfilled(action)) {
         prepareRetryIfUnsuccesful(action.payload);
       }
@@ -149,10 +195,13 @@ export const useMetabotConversation = (conversationId: string) => {
       conversationId,
       isTransformsPage,
       isFullPageMetabot,
+      isDoingScience,
     ],
   );
 
   const cancelRequest = useCallback(() => {
+    contextAbortController.current?.abort();
+    contextAbortController.current = null;
     dispatch(cancelInflightConversationRequests(conversationId));
   }, [dispatch, conversationId]);
 

@@ -251,10 +251,14 @@ export function ProviderConnectionForm({
                 <Select
                   label={t`Model`}
                   description={t`Connecting checks your credentials against this model, and Metabot starts on it.`}
-                  data={selected.models.map(({ id, display_name }) => ({
-                    value: id,
-                    label: display_name,
-                  }))}
+                  data={Array.from(
+                    new Map(
+                      selected.models.map(({ id, display_name }) => [
+                        id,
+                        { value: id, label: display_name },
+                      ]),
+                    ).values(),
+                  )}
                   value={model ?? null}
                   onChange={(next) => setModel(next ?? undefined)}
                   disabled={isSaving}

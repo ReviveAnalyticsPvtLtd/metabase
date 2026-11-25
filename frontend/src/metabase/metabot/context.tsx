@@ -28,6 +28,7 @@ import type {
 
 export type ChatContextProviderFn = (
   state: State,
+  signal?: AbortSignal,
 ) => Promise<Partial<MetabotChatContext> | void>;
 
 export type DeregisterChatContextProviderFn = () => void;
@@ -61,7 +62,7 @@ export type MetabotCtx = {
   setPrompt: (prompt: string) => void;
   promptInputRef: RefObject<MetabotPromptInputRef> | undefined;
 
-  getChatContext: () => Promise<MetabotChatContext>;
+  getChatContext: (signal?: AbortSignal) => Promise<MetabotChatContext>;
   registerChatContextProvider: (
     fn: ChatContextProviderFn,
   ) => DeregisterChatContextProviderFn;
@@ -116,6 +117,8 @@ export const useRegisterMetabotContextProvider = (
   }, [cachedProviderFn, registerChatContextProvider]);
 };
 
+const CHAT_CONTEXT_PROVIDER_TIMEOUT_MS = 5000;
+
 const mergeCtx = (
   ctx: MetabotChatContext,
   partialCtx: Partial<MetabotChatContext>,
@@ -155,38 +158,65 @@ export const MetabotProvider = ({
   const providerFnsRef = useRef<Set<ChatContextProviderFn>>(new Set());
   const store = useStore();
 
-  const getChatContext = useCallback(async () => {
-    const state = store.getState();
-    const providerFns = [...providerFnsRef.current];
+  const getChatContext = useCallback(
+    async (signal?: AbortSignal) => {
+      const state = store.getState();
+      const providerFns = [...providerFnsRef.current];
 
-    const isAdmin = getUserIsAdmin(state);
-    const hasDataAccess = canUserCreateQueries(state);
-    const hasNativeWrite = canUserCreateNativeQueries(state);
+      const isAdmin = getUserIsAdmin(state);
+      const hasDataAccess = canUserCreateQueries(state);
+      const hasNativeWrite = canUserCreateNativeQueries(state);
 
-    let ctx: MetabotChatContext = {
-      user_is_viewing: [],
-      current_time_with_timezone: dayjs.tz(dayjs()).format(),
-      // Unjustified type cast. FIXME
-      capabilities: _.compact([
-        hasDataAccess && "permission:save_questions",
-        hasNativeWrite && "permission:write_sql_queries",
-        isAdmin && "permission:write_transforms",
-      ]) as string[],
-    };
+      let ctx: MetabotChatContext = {
+        user_is_viewing: [],
+        current_time_with_timezone: dayjs.tz(dayjs()).format(),
+        // Unjustified type cast. FIXME
+        capabilities: _.compact([
+          hasDataAccess && "permission:save_questions",
+          hasNativeWrite && "permission:write_sql_queries",
+          isAdmin && "permission:write_transforms",
+        ]) as string[],
+      };
 
-    for (const providerFn of providerFns) {
-      try {
-        const partialCtx = await providerFn(state);
-        if (partialCtx) {
-          ctx = mergeCtx(ctx, partialCtx);
+      for (const providerFn of providerFns) {
+        if (signal?.aborted) {
+          break;
         }
-      } catch (err) {
-        console.error("A metabot chat context provider failed:", err);
-      }
-    }
 
-    return ctx;
-  }, [store]);
+        try {
+          let timer: number | undefined;
+          let onAbort: (() => void) | undefined;
+          try {
+            const timeout = new Promise<undefined>((resolve) => {
+              timer = window.setTimeout(
+                () => resolve(undefined),
+                CHAT_CONTEXT_PROVIDER_TIMEOUT_MS,
+              );
+              onAbort = () => resolve(undefined);
+              signal?.addEventListener("abort", onAbort, { once: true });
+            });
+            const partialCtx = await Promise.race([
+              providerFn(state, signal),
+              timeout,
+            ]);
+            if (partialCtx && !signal?.aborted) {
+              ctx = mergeCtx(ctx, partialCtx);
+            }
+          } finally {
+            window.clearTimeout(timer);
+            if (onAbort) {
+              signal?.removeEventListener("abort", onAbort);
+            }
+          }
+        } catch (err) {
+          console.error("A metabot chat context provider failed:", err);
+        }
+      }
+
+      return ctx;
+    },
+    [store],
+  );
 
   const registerChatContextProvider = useCallback(
     (providerFn: ChatContextProviderFn) => {

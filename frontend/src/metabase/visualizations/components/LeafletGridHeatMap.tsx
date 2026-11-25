@@ -34,6 +34,7 @@ const isValidCoordinatesColumn = (column: DatasetColumn | undefined) =>
 
 export class LeafletGridHeatMap extends LeafletMap<LeafletGridHeatMapProps> {
   gridLayer: L.LayerGroup | null = null;
+  private lastRenderError: string | null = null;
 
   static isSensible({ cols }: { cols: DatasetColumn[] }) {
     return (
@@ -75,8 +76,6 @@ export class LeafletGridHeatMap extends LeafletMap<LeafletGridHeatMapProps> {
         throw new Error(t`Grid map requires binned longitude/latitude.`);
       }
 
-      const { latitudeIndex, longitudeIndex } = this._getLatLonIndexes();
-
       const successColor = d3.rgb(color("feedback-positive"));
       const errorColor = d3.rgb(color("feedback-negative"));
 
@@ -92,8 +91,8 @@ export class LeafletGridHeatMap extends LeafletMap<LeafletGridHeatMapProps> {
       const gridSquares = gridLayer.getLayers().filter(isRectangleLayer);
       const totalSquares = Math.max(points.length, gridSquares.length);
 
-      const latitudeValues = points.map((row) => row[latitudeIndex]);
-      const longitudeValues = points.map((row) => row[longitudeIndex]);
+      const latitudeValues = points.map(([latitude]) => latitude);
+      const longitudeValues = points.map(([, longitude]) => longitude);
 
       const latitudeBinning =
         latitudeColumn.binning_info?.bin_width ??
@@ -132,9 +131,14 @@ export class LeafletGridHeatMap extends LeafletMap<LeafletGridHeatMapProps> {
           ]);
         }
       }
+      this.lastRenderError = null;
     } catch (error) {
-      console.error(error);
-      this.props.onRenderError(error instanceof Error ? error.message : error);
+      const message = error instanceof Error ? error.message : String(error);
+      if (this.lastRenderError !== message) {
+        this.lastRenderError = message;
+        console.error(error);
+        this.props.onRenderError(message);
+      }
     }
   }
 

@@ -28,6 +28,8 @@ type SetParameterValue = (
   value: ParameterValueOrArray | null,
 ) => (dispatch: Dispatch) => void;
 
+type SetReportCrossFilters = (clicked: ClickObject) => void;
+
 function getAction(
   type: DashboardDrillType,
   question: Question,
@@ -41,6 +43,9 @@ function getAction(
   // Also injected via extraData by the useClickBehaviorData hook.
   const setParameterValue = clicked.extraData
     ?.setParameterValue as SetParameterValue;
+  // Injected by useClickBehaviorData for report-level cross-filter updates.
+  const setReportCrossFilters = clicked.extraData
+    ?.setReportCrossFilters as SetReportCrossFilters;
 
   switch (type) {
     case "link-url":
@@ -59,6 +64,10 @@ function getAction(
     case "dashboard-filter":
       return {
         action: () => {
+          if (setReportCrossFilters) {
+            setReportCrossFilters(clicked);
+            return () => undefined;
+          }
           const parameterIdValuePairs = getDashboardDrillParameters(clicked);
           return setOrUnsetParameterValues(parameterIdValuePairs);
         },

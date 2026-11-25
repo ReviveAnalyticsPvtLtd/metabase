@@ -16,7 +16,7 @@ const getTitle = (question: Question) => {
   return match(question.type())
     .with("model", () => t`Model settings`)
     .with("metric", () => t`Metric settings`)
-    .otherwise(() => t`Question settings`);
+    .otherwise(() => t`Analysis settings`);
 };
 
 export const QuestionSettingsSidebar = ({

@@ -1,0 +1,36 @@
+# Isolated MySQL + Metabase Staging Target for MicroStar Control Tower Acceptance
+# Usage (requires Docker daemon):
+#   docker compose -f metabase/bin/nubrix/docker-compose.staging.yml up -d
+# Teardown:
+#   docker compose -f metabase/bin/nubrix/docker-compose.staging.yml down -v
+
+services:
+  staging-mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: ${STAGING_MYSQL_ROOT_PASSWORD:?set STAGING_MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: microstar_staging
+      MYSQL_USER: microstar_reader
+      MYSQL_PASSWORD: ${STAGING_MYSQL_READER_PASSWORD:?set STAGING_MYSQL_READER_PASSWORD}
+    ports:
+      - "127.0.0.1:3307:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  staging-metabase:
+    image: metabase/metabase:latest
+    depends_on:
+      staging-mysql:
+        condition: service_healthy
+    environment:
+      MB_SITE_URL: http://127.0.0.1:3001
+    ports:
+      - "127.0.0.1:3001:3000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 15

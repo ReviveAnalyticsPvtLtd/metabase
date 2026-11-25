@@ -53,6 +53,23 @@ describe("markOnce", () => {
     ]);
   });
 
+  it("exposes marks for analysis, reports, cross-filters, and AI turns", () => {
+    const mark = stubPerformanceMark();
+
+    [
+      PERFORMANCE_MARKS.analysisEditorMounted,
+      PERFORMANCE_MARKS.analysisQueryReady,
+      PERFORMANCE_MARKS.reportShellMounted,
+      PERFORMANCE_MARKS.reportContentReady,
+      PERFORMANCE_MARKS.crossFilterDispatched,
+      PERFORMANCE_MARKS.crossFilterStateUpdated,
+      PERFORMANCE_MARKS.aiActionStarted,
+      PERFORMANCE_MARKS.aiActionCompleted,
+    ].forEach(markOnce);
+
+    expect(mark).toHaveBeenCalledTimes(8);
+  });
+
   it("does nothing where the Performance API is absent, as in static-viz", () => {
     expect(() => markOnce(PERFORMANCE_MARKS.appMounted)).not.toThrow();
   });

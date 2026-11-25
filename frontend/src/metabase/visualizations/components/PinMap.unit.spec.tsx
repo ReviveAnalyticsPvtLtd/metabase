@@ -16,6 +16,9 @@ import {
 } from "metabase-types/api/mocks";
 import { ORDERS_ID, SAMPLE_DB_ID } from "metabase-types/api/mocks/presets";
 
+import { LeafletGridHeatMap } from "./LeafletGridHeatMap";
+import { LeafletMarkerPinMap } from "./LeafletMarkerPinMap";
+import { LeafletTilePinMap } from "./LeafletTilePinMap";
 import { PinMap, getPoints } from "./PinMap";
 
 const createData = (cols: string[], rows: RowValue[][]) =>
@@ -25,6 +28,50 @@ const createData = (cols: string[], rows: RowValue[][]) =>
   });
 
 describe("getPoints", () => {
+  it("rejects non-finite, non-numeric, and out-of-range coordinates", () => {
+    const { points, warnings } = getPoints({
+      data: createData(
+        ["lat", "lng"],
+        [
+          [NaN, 20],
+          [10, Infinity],
+          [91, 20],
+          [10, -181],
+          ["10", 20],
+          [90, 180],
+          [-90, -180],
+        ],
+      ),
+      latitudeColumnName: "lat",
+      longitudeColumnName: "lng",
+      isPinMap: true,
+    });
+    expect(points).toEqual([
+      [90, 180, 1],
+      [-90, -180, 1],
+    ]);
+    expect(warnings).toEqual([
+      "We filtered out 5 row(s) containing missing or invalid map values.",
+    ]);
+  });
+
+  it("rejects invalid metrics for heat/grid rendering", () => {
+    const { points } = getPoints({
+      data: createData(
+        ["lat", "lng", "metric"],
+        [
+          [10, 20, NaN],
+          [10, 20, Infinity],
+          [10, 20, "5"],
+          [10, 20, 0],
+        ],
+      ),
+      latitudeColumnName: "lat",
+      longitudeColumnName: "lng",
+      metricColumnName: "metric",
+    });
+    expect(points).toEqual([[10, 20, 0]]);
+  });
   it("should filter out rows with null values in either the lat, long, or metric column", () => {
     const { points, warnings } = getPoints({
       data: createData(
@@ -253,6 +300,7 @@ describe("PinMap", () => {
     settings?: VisualizationSettings;
   } = {}) => {
     const onRender = jest.fn();
+    const onRenderError = jest.fn();
 
     const series = [
       createMockSingleSeries(
@@ -275,13 +323,14 @@ describe("PinMap", () => {
       isDashboard,
       height: 300,
       onRender,
+      onRenderError,
     });
 
     const { rerender } = renderWithProviders(
       <PinMap {...props} token={token} />,
     );
 
-    return { onRender, props, rerender };
+    return { onRender, onRenderError, props, rerender };
   };
 
   beforeEach(() => {
@@ -296,6 +345,37 @@ describe("PinMap", () => {
   afterEach(() => {
     jest.restoreAllMocks();
   });
+
+  it.each([
+    { type: "pin", pinType: "markers", renderer: LeafletMarkerPinMap },
+    { type: "pin", pinType: "tiles", renderer: LeafletTilePinMap },
+    { type: "grid", pinType: "markers", renderer: LeafletGridHeatMap },
+    { type: "heat", pinType: "markers", renderer: LeafletGridHeatMap },
+  ] as const)(
+    "mounts the normalized $type/$pinType renderer",
+    ({ type, pinType, renderer }) => {
+      const mount = jest.spyOn(renderer.prototype, "componentDidMount");
+      const { onRenderError } = setup({
+        data: createMockDatasetData({
+          cols: [
+            createMockColumn({ name: "lat", binning_info: { bin_width: 1 } }),
+            createMockColumn({ name: "lng", binning_info: { bin_width: 1 } }),
+            createMockColumn({ name: "metric" }),
+          ],
+          rows: [[10, 20, 5]],
+        }),
+        settings: {
+          "map.type": type,
+          "map.pin_type": pinType,
+          "map.latitude_column": "lat",
+          "map.longitude_column": "lng",
+          "map.metric_column": "metric",
+        },
+      });
+      expect(mount).toHaveBeenCalledTimes(1);
+      expect(onRenderError).not.toHaveBeenCalled();
+    },
+  );
 
   it("should render the 'Set as default view' button with the PinMapUpdateButton class", () => {
     setup();
@@ -381,8 +461,24 @@ describe("PinMap", () => {
     expect(screen.queryByText("Draw box to filter")).not.toBeInTheDocument();
   });
 
-  it("should clear the map instance when switching to a pin type with no renderer", async () => {
-    const { props, rerender } = setup();
+  it("should render the heat map through the grid heat renderer", async () => {
+    const { props, rerender } = setup({
+      data: createMockDatasetData({
+        cols: [
+          createMockColumn({ name: "lat", binning_info: { bin_width: 1 } }),
+          createMockColumn({ name: "lng", binning_info: { bin_width: 1 } }),
+          createMockColumn({ name: "metric" }),
+        ],
+        rows: [[10, 20, 5]],
+      }),
+      settings: {
+        "map.type": "grid",
+        "map.pin_type": "grid",
+        "map.latitude_column": "lat",
+        "map.longitude_column": "lng",
+        "map.metric_column": "metric",
+      },
+    });
 
     expect(await screen.findByText("Draw box to filter")).toBeInTheDocument();
 
@@ -393,6 +489,112 @@ describe("PinMap", () => {
       />,
     );
 
-    expect(screen.queryByText("Draw box to filter")).not.toBeInTheDocument();
+    expect(screen.getByText("Draw box to filter")).toBeInTheDocument();
+  });
+
+  it("should keep the map controls when switching to the heat renderer", async () => {
+    const { props, rerender } = setup({
+      data: createMockDatasetData({
+        cols: [
+          createMockColumn({ name: "lat", binning_info: { bin_width: 1 } }),
+          createMockColumn({ name: "lng", binning_info: { bin_width: 1 } }),
+        ],
+        rows: [[10, 20]],
+      }),
+    });
+
+    expect(await screen.findByText("Draw box to filter")).toBeInTheDocument();
+
+    rerender(
+      <PinMap
+        {...props}
+        settings={{ ...props.settings, "map.pin_type": "heat" }}
+      />,
+    );
+
+    expect(screen.getByText("Draw box to filter")).toBeInTheDocument();
+  });
+
+  it("does not mutate caller-owned rows while filtering invalid points", () => {
+    const data = createData(
+      ["lat", "lng"],
+      [
+        [10, 20],
+        [null, 30],
+      ],
+    );
+    const rows = data.rows;
+    setup({ data });
+    expect(data.rows).toBe(rows);
+    expect(data.rows).toEqual([
+      [10, 20],
+      [null, 30],
+    ]);
+  });
+
+  it("reports invalid grid settings only once across repeated updates", () => {
+    const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+    const { props, rerender, onRenderError } = setup({
+      settings: {
+        "map.type": "grid",
+        "map.pin_type": "grid",
+        "map.latitude_column": "lat",
+        "map.longitude_column": "lng",
+      },
+    });
+    rerender(<PinMap {...props} height={400} />);
+    expect(onRenderError).toHaveBeenCalledTimes(1);
+    expect(onRenderError).toHaveBeenCalledWith(
+      "Grid map requires binned longitude/latitude.",
+    );
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("escapes hostile category values in the map legend", () => {
+    const data = createData(
+      ["CustomerType", "Latitude", "Longitude"],
+      [
+        ["Brewer", 19.076, 72.877],
+        ["<img src=x onerror=alert(1)>", 12.971, 77.594],
+      ],
+    );
+    setup({
+      data,
+      settings: {
+        "map.type": "pin",
+        "map.pin_type": "markers",
+        "map.latitude_column": "Latitude",
+        "map.longitude_column": "Longitude",
+      },
+    });
+    const legend = document.querySelector(".nubrix-map-legend");
+    expect(legend).not.toBeNull();
+    expect(legend?.querySelectorAll("img").length).toBe(0);
+    expect(legend?.textContent).toContain("<img src=x onerror=alert(1)>");
+  });
+
+  it("renders marker icons and tooltips safely for hostile labels", () => {
+    const hostileType = '<script>alert(1)</script>" onmouseover="alert(2)';
+    const data = createData(
+      ["CustomerName", "CustomerType", "Region", "City", "State", "Latitude", "Longitude"],
+      [
+        ['<img src=x onerror=alert(9)>', hostileType, "<b>West</b>", "Pune", "MH", 18.52, 73.85],
+      ],
+    );
+    setup({
+      data,
+      settings: {
+        "map.type": "pin",
+        "map.pin_type": "markers",
+        "map.latitude_column": "Latitude",
+        "map.longitude_column": "Longitude",
+      },
+    });
+    const marker = document.querySelector(".nubrix-custom-pin-marker");
+    expect(marker).not.toBeNull();
+    expect(marker?.querySelectorAll("script").length).toBe(0);
+    const imgRoleEl = marker?.querySelector('[role="img"]');
+    expect(imgRoleEl).not.toBeNull();
+    expect(imgRoleEl?.getAttribute("aria-label")).toBe(hostileType);
   });
 });

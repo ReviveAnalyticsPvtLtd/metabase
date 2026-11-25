@@ -34,31 +34,53 @@ export function useLlmConnectionModels() {
 // The label is what a closed Select shows, and a model name alone does not say which provider
 // serves it. The dropdown renders [[modelNameByRef]] instead, where the group heading already does.
 function getModelOptions(connections: LlmConnectionModels[]) {
-  return connections
-    .filter((connection) => connection.models.length > 0)
-    .map((connection) => ({
-      group: connection.name,
-      items: connection.models.map((model) => ({
-        value: `${connection.key}/${model.id}`,
-        label: `${connection.name} · ${model.display_name}`,
-      })),
-    }));
+  const seenValues = new Set<string>();
+
+  return (connections || [])
+    .filter((connection) => (connection?.models || []).length > 0)
+    .map((connection) => {
+      const items: Array<{ value: string; label: string }> = [];
+
+      for (const model of connection?.models || []) {
+        if (!model?.id) {
+          continue;
+        }
+        const value = `${connection.key}/${model.id}`;
+        if (!seenValues.has(value)) {
+          seenValues.add(value);
+          items.push({
+            value,
+            label: `${connection.name} · ${model.display_name || model.id}`,
+          });
+        }
+      }
+
+      return {
+        group: connection.name,
+        items,
+      };
+    })
+    .filter((group) => group.items.length > 0);
 }
 
 function getModelNameByRef(connections: LlmConnectionModels[]) {
-  return Object.fromEntries(
-    connections.flatMap((connection) =>
-      connection.models.map((model) => [
-        `${connection.key}/${model.id}`,
-        model.display_name,
-      ]),
-    ),
-  );
+  const result: Record<string, string> = {};
+  for (const connection of connections || []) {
+    for (const model of connection?.models || []) {
+      if (model?.id) {
+        const key = `${connection.key}/${model.id}`;
+        if (!result[key]) {
+          result[key] = model.display_name || model.id;
+        }
+      }
+    }
+  }
+  return result;
 }
 
 function getErrorByConnectionKey(connections: LlmConnectionModels[]) {
-  const entries = connections.flatMap((connection) =>
-    connection.error ? [[connection.key, connection.error] as const] : [],
+  const entries = (connections || []).flatMap((connection) =>
+    connection?.error ? [[connection.key, connection.error] as const] : [],
   );
   return Object.fromEntries(entries);
 }

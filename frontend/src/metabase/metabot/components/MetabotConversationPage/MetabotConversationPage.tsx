@@ -50,7 +50,7 @@ export const MetabotConversationPage = () => {
 
   useEffect(
     function syncUrlConvoToStore() {
-      if (!conversation) {
+      if (!conversation || isInProgress) {
         return;
       }
 
@@ -67,7 +67,7 @@ export const MetabotConversationPage = () => {
         }),
       );
     },
-    [conversation, dispatch],
+    [conversation, dispatch, isInProgress],
   );
 
   if (isSettingsLoading || isLoading) {

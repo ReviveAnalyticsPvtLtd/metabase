@@ -86,7 +86,10 @@ export const getStatusColorRanges = (): string[][] => {
   ];
 };
 
-export const getPreferredColor = (key: string, palette?: ColorPalette) => {
+export const getPreferredColor = (key?: string | null, palette?: ColorPalette) => {
+  if (!key || typeof key !== "string") {
+    return undefined;
+  }
   switch (key.toLowerCase()) {
     case "success":
     case "succeeded":
