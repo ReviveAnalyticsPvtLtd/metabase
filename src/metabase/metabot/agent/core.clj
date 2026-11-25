@@ -564,14 +564,14 @@
     (reduce (fn [{:keys [streak failed-tools] :as progress} part]
               (if-let [signature (and (= :tool-output (:type part)) (get inputs (:id part)))]
                 (if (or (:error part)
-                        (and (get-in part [:result :output])
-                             (not (successful-tool-output? part))))
+                        (get-in part [:result :error])
+                        (get-in part [:result :is-error]))
                   (assoc progress
                          :streak (inc streak)
                          :failed-tools (conj failed-tools signature)
                          :stalled? (or (:stalled? progress)
                                        (contains? failed-tools signature)
-                                       (>= (inc streak) 2)))
+                                       (>= (inc streak) 4)))
                   (assoc progress :streak 0))
                 progress))
             (select-keys loop-state [:streak :failed-tools])
