@@ -2,44 +2,60 @@ import { Badge, Group, Icon } from "metabase/ui";
 import type { IconName } from "metabase/ui";
 
 interface StatusConfig {
-  color: string;
+  bg: string;
+  fg: string;
+  border: string;
   icon: IconName;
   label: string;
 }
 
 const STATUS_MAP: Record<string, StatusConfig> = {
   "Fully covered": {
-    color: "green",
+    bg: "#E6F4EA",
+    fg: "#137333",
+    border: "#CEEAD6",
     icon: "check",
     label: "Fully covered",
   },
   "Partially covered": {
-    color: "yellow",
+    bg: "#FEF7E0",
+    fg: "#B06000",
+    border: "#FEEFC3",
     icon: "warning",
     label: "Partially covered",
   },
   "Needs attention": {
-    color: "red",
+    bg: "#FCE8E6",
+    fg: "#C5221F",
+    border: "#FAD2CF",
     icon: "warning",
     label: "Needs attention",
   },
   "No allocation": {
-    color: "red",
+    bg: "#FCE8E6",
+    fg: "#C5221F",
+    border: "#FAD2CF",
     icon: "close",
     label: "Needs attention",
   },
   "Not planned": {
-    color: "gray",
+    bg: "#F1F3F4",
+    fg: "#3C4043",
+    border: "#DADCE0",
     icon: "clock",
     label: "Not planned",
   },
   "Outside current horizon": {
-    color: "gray",
+    bg: "#F1F3F4",
+    fg: "#3C4043",
+    border: "#DADCE0",
     icon: "info",
     label: "Outside current horizon",
   },
   "Data unavailable": {
-    color: "gray",
+    bg: "#F1F3F4",
+    fg: "#3C4043",
+    border: "#DADCE0",
     icon: "info",
     label: "Data unavailable",
   },
@@ -47,12 +63,23 @@ const STATUS_MAP: Record<string, StatusConfig> = {
 
 export function StatusBadge({ status }: { status?: string | null }) {
   const cfg = STATUS_MAP[status || ""] ?? {
-    color: "gray",
+    bg: "#F1F3F4",
+    fg: "#3C4043",
+    border: "#DADCE0",
     icon: "info" as IconName,
     label: status || "Unknown",
   };
   return (
-    <Badge color={cfg.color} variant="light" size="sm" radius="sm">
+    <Badge
+      size="sm"
+      radius="sm"
+      style={{
+        backgroundColor: cfg.bg,
+        color: cfg.fg,
+        border: `1px solid ${cfg.border}`,
+        textTransform: "none",
+      }}
+    >
       <Group gap={4} wrap="nowrap">
         <Icon name={cfg.icon} size={12} />
         <span>{cfg.label}</span>

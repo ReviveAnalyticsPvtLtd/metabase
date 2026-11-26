@@ -104,7 +104,15 @@ export function OrdersPage() {
           <Button variant="default" onClick={() => navigate("/dashboard/23")}>
             {t`Control Tower Overview`}
           </Button>
-          <Button variant="light" color="red" onClick={() => navigate("/operations/exceptions")}>
+          <Button
+            variant="default"
+            style={{
+              backgroundColor: "#FCE8E6",
+              color: "#C5221F",
+              borderColor: "#FAD2CF",
+            }}
+            onClick={() => navigate("/operations/exceptions")}
+          >
             {t`View Exceptions`}
           </Button>
         </Group>

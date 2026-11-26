@@ -133,7 +133,9 @@ export function OrderDetailPage() {
           </div>
           <div>
             <Text size="xs" c="text-secondary">{t`Proposed now`}</Text>
-            <Text size="lg" fw={700} c="blue">{order.allocated_units.toLocaleString()}</Text>
+            <Text size="lg" fw={700} style={{ color: "var(--mb-color-brand)" }}>
+              {order.allocated_units.toLocaleString()}
+            </Text>
           </div>
           <div>
             <Text size="xs" c="text-secondary">{t`Still uncovered`}</Text>
@@ -149,7 +151,16 @@ export function OrderDetailPage() {
         <Title order={4} mb="sm">{t`Proposed fulfillment journey`}</Title>
         <Flex align="center" gap="md" wrap="wrap">
           <Box p="sm" style={{ border: "1px solid var(--mb-color-border)", borderRadius: 6, minWidth: 200 }}>
-            <Badge size="xs" color="blue" variant="light" mb={4}>
+            <Badge
+              size="xs"
+              mb={4}
+              style={{
+                backgroundColor: "#E8F0FE",
+                color: "#1967D2",
+                border: "1px solid #D2E3FC",
+                textTransform: "none",
+              }}
+            >
               {order.src_role || t`Source facility`}
             </Badge>
             <Text fw={600}>{order.source_hub}</Text>
@@ -159,7 +170,16 @@ export function OrderDetailPage() {
           </Box>
           <Text fw={700}>→</Text>
           <Box p="sm" style={{ border: "1px solid var(--mb-color-border)", borderRadius: 6, minWidth: 200 }}>
-            <Badge size="xs" color="teal" variant="light" mb={4}>
+            <Badge
+              size="xs"
+              mb={4}
+              style={{
+                backgroundColor: "#E6F4EA",
+                color: "#137333",
+                border: "1px solid #CEEAD6",
+                textTransform: "none",
+              }}
+            >
               {order.distributor_mode === "physical_stop" ? t`Physical stop` : t`Coordinator (not a physical stop)`}
             </Badge>
             <Text fw={600}>{order.distributor || "Unassigned"}</Text>
@@ -171,7 +191,16 @@ export function OrderDetailPage() {
           </Box>
           <Text fw={700}>→</Text>
           <Box p="sm" style={{ border: "1px solid var(--mb-color-border)", borderRadius: 6, minWidth: 200 }}>
-            <Badge size="xs" color="indigo" variant="light" mb={4}>
+            <Badge
+              size="xs"
+              mb={4}
+              style={{
+                backgroundColor: "#EDE7F6",
+                color: "#4527A0",
+                border: "1px solid #D1C4E9",
+                textTransform: "none",
+              }}
+            >
               {t`Destination Brewer`}
             </Badge>
             <Text fw={600}>{order.destination_brewer}</Text>
@@ -227,7 +256,15 @@ export function OrderDetailPage() {
                       : t`Outside window`
                     : "—"}
                 </Text>
-                <Badge size="xs" variant="light" color="gray">
+                <Badge
+                  size="xs"
+                  style={{
+                    backgroundColor: "#F1F3F4",
+                    color: "#3C4043",
+                    border: "1px solid #DADCE0",
+                    textTransform: "none",
+                  }}
+                >
                   {item.basis}
                 </Badge>
               </Group>
@@ -279,7 +316,24 @@ export function OrderDetailPage() {
                     <td style={{ padding: "8px 10px", textAlign: "right" }}>{`${alt.slack_days} d`}</td>
                     <td style={{ padding: "8px 10px", textAlign: "right" }}>{`₹${Number(alt.freight_cost_inr).toLocaleString()}`}</td>
                     <td style={{ padding: "8px 10px" }}>
-                      <Badge color={alt.selected ? "green" : "gray"} variant="light" size="sm">
+                      <Badge
+                        size="sm"
+                        style={
+                          alt.selected
+                            ? {
+                                backgroundColor: "#E6F4EA",
+                                color: "#137333",
+                                border: "1px solid #CEEAD6",
+                                textTransform: "none",
+                              }
+                            : {
+                                backgroundColor: "#F1F3F4",
+                                color: "#3C4043",
+                                border: "1px solid #DADCE0",
+                                textTransform: "none",
+                              }
+                        }
+                      >
                         {alt.selected ? t`Selected` : t`Not selected`}
                       </Badge>
                     </td>

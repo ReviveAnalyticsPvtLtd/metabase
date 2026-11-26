@@ -24,10 +24,26 @@ export function SimulationBanner({
     >
       <Flex justify="space-between" align="center" wrap="wrap" gap="sm">
         <Group gap="xs" wrap="wrap">
-          <Badge color="blue" variant="light" size="sm">
+          <Badge
+            size="sm"
+            style={{
+              backgroundColor: "#E8F0FE",
+              color: "#1967D2",
+              border: "1px solid #D2E3FC",
+              textTransform: "none",
+            }}
+          >
             {t`Simulated scenario`}
           </Badge>
-          <Badge color="yellow" variant="light" size="sm">
+          <Badge
+            size="sm"
+            style={{
+              backgroundColor: "#FEF7E0",
+              color: "#B06000",
+              border: "1px solid #FEEFC3",
+              textTransform: "none",
+            }}
+          >
             {t`Proposed plan — not a booking`}
           </Badge>
           {run?.as_of_date && (
