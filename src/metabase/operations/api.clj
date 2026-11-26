@@ -49,7 +49,8 @@
               (first (run-native-query
                       "SELECT run_id, created_at, as_of_date, solver_status, orders_total,
                               orders_fully_covered, orders_partially_covered, orders_uncovered,
-                              kegs_ordered, kegs_allocated, provenance_json, is_active
+                              kegs_ordered, kegs_allocated, provenance_json, is_active,
+                              planning_mode, objective_policy, split_policy, omitted_candidates_total
                        FROM nubrix_poc_runs
                        WHERE run_id = ?
                        LIMIT 1"
@@ -57,7 +58,8 @@
               (first (run-native-query
                       "SELECT r.run_id, r.created_at, r.as_of_date, r.solver_status, r.orders_total,
                               r.orders_fully_covered, r.orders_partially_covered, r.orders_uncovered,
-                              r.kegs_ordered, r.kegs_allocated, r.provenance_json, r.is_active
+                              r.kegs_ordered, r.kegs_allocated, r.provenance_json, r.is_active,
+                              r.planning_mode, r.objective_policy, r.split_policy, r.omitted_candidates_total
                        FROM nubrix_poc_run_pointer p
                        JOIN nubrix_poc_runs r ON r.run_id = p.active_run_id
                        WHERE p.pointer_id = 1
@@ -80,6 +82,11 @@
        :orders_uncovered         (long (or (:orders_uncovered row) 0))
        :kegs_ordered             (long (or (:kegs_ordered row) 0))
        :kegs_allocated           (long (or (:kegs_allocated row) 0))
+       :planning_mode            (or (:planning_mode row) (:planning_mode prov) "MODE_A_ORDER_LEVEL")
+       :objective_policy         (or (:objective_policy row) (:objective_policy prov) "lexicographic_equivalent_weighted_v2")
+       :split_policy             (or (:split_policy row) (:split_policy prov) "single_source_per_order")
+       :omitted_candidates_total (long (or (:omitted_candidates_total row) (:omitted_candidates_total prov) 0))
+       :max_candidates_per_order (long (or (:max_candidates_per_order prov) 12))
        :diagnostic               {:solver_status (:solver_status row)
                                   :provenance    prov}})))
 
@@ -316,68 +323,212 @@
                         [pinned order-id]))]
     (when-not row
       (throw (ex-info "Order not found" {:status-code 404})))
-    (let [ordered   (long (or (:ordered_units row) 0))
-          fulfilled (long (or (:fulfilled_units row) 0))
-          pending   (long (or (:pending_units row) 0))
-          proposed  (long (or (:allocated_units row) 0))
-          uncovered (long (or (:uncovered_units row) 0))
+    (let [ordered     (long (or (:ordered_units row) 0))
+          fulfilled   (long (or (:fulfilled_units row) 0))
+          pending     (long (or (:pending_units row) 0))
+          proposed    (long (or (:allocated_units row) 0))
+          uncovered   (long (or (:uncovered_units row) 0))
           reconciled? (and (= pending (- ordered fulfilled))
-                           (= pending (+ proposed uncovered)))]
+                           (= pending (+ proposed uncovered)))
+          sel-ev      (when (pos? proposed)
+                        (first (run-native-query
+                                "SELECT candidate_route_id, source_customer_id, carrier_name,
+                                        candidate_quantity, freight_cost_inr, decision_stage, cost_formula
+                                 FROM nubrix_poc_candidate_evidence
+                                 WHERE run_id = ? AND order_id = ? AND is_selected = 1
+                                 LIMIT 1"
+                                [pinned order-id])))
+          checks      (when (pos? proposed)
+                        (cond-> []
+                          (nil? sel-ev)
+                          (conj "No persisted selected candidate row found in evidence.")
+                          (and sel-ev (:selected_candidate_id row)
+                               (not= (long (:selected_candidate_id row))
+                                     (long (:candidate_route_id sel-ev))))
+                          (conj "Selected candidate ID mismatch between allocation and evidence.")
+                          (and sel-ev (not= (:source_customer_id row) (:source_customer_id sel-ev)))
+                          (conj "Source customer ID mismatch between allocation and evidence.")
+                          (and sel-ev (not= (:carrier row) (:carrier_name sel-ev)))
+                          (conj "Carrier mismatch between allocation and evidence.")
+                          (and sel-ev (:candidate_quantity sel-ev)
+                               (not= proposed (long (:candidate_quantity sel-ev))))
+                          (conj "Quantity mismatch between allocation and selected candidate evidence.")))
+          modeled-legs (if (pos? proposed)
+                         [{:leg_index 1
+                           :from_id   (:source_customer_id row)
+                           :from_name (:source_hub row)
+                           :to_id     (:destination_customer_id row)
+                           :to_name   (:destination_brewer row)
+                           :distance_km (long (or (:distance_km row) 0))
+                           :transit_days (long (or (:transit_days row) 0))
+                           :carrier   (:carrier row)
+                           :quantity  proposed
+                           :basis     "modeled"}]
+                         [])]
       {:order       (assoc row
                            :status (normalize-status row)
                            :reconciled reconciled?
-                           :distributor_mode "coordinator"
+                           :distributor_mode (or (:distributor_mode row) "coordinator")
                            :why_this_plan (deterministic-explanation row)
+                           :cost_formula (:cost_formula sel-ev)
+                           :modeled_legs modeled-legs
                            :timeline [{:label "Order created" :date (:ordered_date row) :basis "observed"}
                                       {:label "Needed by" :date (:needed_by row) :basis "observed"}
                                       {:label "Estimated transit" :days (:transit_days row) :basis "modeled (CEIL(km / 400))"}
                                       {:label "Deadline check" :feasible (= "Y" (:on_time_feasible row)) :basis "modeled"}])
+       :quantity_reconciliation {:ordered ordered
+                                 :fulfilled fulfilled
+                                 :pending pending
+                                 :proposed proposed
+                                 :uncovered uncovered
+                                 :reconciled reconciled?}
+       :consistency_check {:passed (empty? checks)
+                           :warnings (vec (or checks []))}
+       :planning_policy {:mode (:planning_mode run)
+                         :split_policy (:split_policy run)
+                         :objective_policy (:objective_policy run)
+                         :decision_stage (or (:decision_stage row) (:decision_stage sel-ev) "UNKNOWN")
+                         :trip_capability false
+                         :shared_trip_message "No validated shared-trip record is available for this proposal."
+                         :map_mode "schematic"}
        :run         run
        :disclosures standard-disclosures})))
 
 #_{:clj-kondo/ignore [:metabase/validate-defendpoint-has-response-schema]}
 (api.macros/defendpoint :get "/orders/:order-id/alternatives"
-  "Persisted candidate alternatives and rejection reasons for an order."
+  "Persisted candidate alternatives and exact rejection reasons for an order."
   [{:keys [order-id]} :- [:map {:closed true} [:order-id :string]]
    {:keys [run_id]} :- [:map {:closed true} [:run_id {:optional true} [:maybe :string]]]
    _body _req]
   (check-operations-access!)
-  (let [run  (resolve-pinned-run run_id)
-        pinned (:run_id run)
-        rows (run-native-query
-              "SELECT e.evidence_id, e.order_id, e.candidate_route_id, e.source_customer_id,
-                      COALESCE(c.CustomerName, e.source_customer_id) AS source_name,
-                      c.CustomerType AS source_role,
-                      e.carrier_name, e.distance_km, e.freight_cost_inr,
-                      e.transit_days, e.slack_days, e.is_selected, e.rejection_reason
-               FROM nubrix_poc_candidate_evidence e
-               LEFT JOIN dimCustomer c ON c.CustomerId = e.source_customer_id OR c.CustomerName = e.source_customer_id
-               WHERE e.run_id = ? AND e.order_id = ?
-               ORDER BY e.is_selected DESC, e.freight_cost_inr ASC
-               LIMIT 200"
-              [pinned order-id])
-        sel-freight (some #(when (truthy-flag? (:is_selected %))
-                             (some-> (:freight_cost_inr %) double))
-                          rows)
-        format-alt  (fn [r]
-                      (let [sel?    (truthy-flag? (:is_selected r))
-                            freight (some-> (:freight_cost_inr r) double)
-                            reason  (cond
-                                      (not (str/blank? (:rejection_reason r))) (:rejection_reason r)
-                                      sel? "Chosen within modeled bounds"
-                                      (and sel-freight freight (< freight sel-freight))
-                                      "Feasible lane; capacity committed to other orders in the global plan"
-                                      (and sel-freight freight (>= freight sel-freight))
-                                      "Higher modeled freight than selected option"
-                                      :else "Not selected within modeled solver constraints")]
-                        (assoc r
-                               :selected sel?
-                               :rejection_reason reason)))]
-    {:order_id            order-id
-     :incomplete_evidence (empty? rows)
-     :alternatives        (mapv format-alt rows)
-     :run                 run
-     :disclosures         standard-disclosures}))
+  (let [run       (resolve-pinned-run run_id)
+        pinned    (:run_id run)
+        alloc-row (first (run-native-query
+                          "SELECT selected_candidate_id, omitted_candidates_count
+                           FROM nubrix_poc_allocations
+                           WHERE run_id = ? AND order_id = ?
+                           LIMIT 1"
+                          [pinned order-id]))
+        count-row (first (run-native-query
+                          "SELECT COUNT(*) AS total_cnt
+                           FROM nubrix_poc_candidate_evidence
+                           WHERE run_id = ? AND order_id = ?"
+                          [pinned order-id]))
+        eval-cnt  (long (or (:total_cnt count-row) 0))
+        rows      (run-native-query
+                   "SELECT e.evidence_id, e.order_id, e.candidate_route_id, e.source_customer_id,
+                           COALESCE(c.CustomerName, e.source_name, e.source_customer_id) AS source_name,
+                           c.CustomerType AS source_role,
+                           e.distributor_customer_id, e.distributor_name,
+                           e.carrier_id, e.carrier_name, e.distance_km, e.freight_cost_inr,
+                           e.transit_days, e.slack_days, e.is_selected, e.rejection_reason,
+                           e.candidate_quantity, e.stock_available_kegs, e.stock_remaining_kegs,
+                           e.carrier_max_load_kegs, e.is_feasible, e.reason_code,
+                           e.competing_order_ids, e.decision_stage, e.cost_formula
+                    FROM nubrix_poc_candidate_evidence e
+                    LEFT JOIN dimCustomer c ON c.CustomerId = e.source_customer_id
+                    WHERE e.run_id = ? AND e.order_id = ?
+                    ORDER BY e.is_selected DESC, e.freight_cost_inr ASC
+                    LIMIT 200"
+                   [pinned order-id])
+        omitted   (long (or (:omitted_candidates_count alloc-row) 0))
+        truncated (or (> eval-cnt 200) (pos? omitted))
+        ev-status (cond
+                    (empty? rows) "empty"
+                    truncated     "partial"
+                    :else         "complete")
+        format-alt (fn [r]
+                     (let [sel? (truthy-flag? (:is_selected r))]
+                       (assoc r
+                              :selected sel?
+                              :feasible (if (nil? (:is_feasible r)) true (truthy-flag? (:is_feasible r)))
+                              :rejection_reason (or (:rejection_reason r)
+                                                    (if sel?
+                                                      "Selected in optimization run"
+                                                      "Reason not recorded in historical run")))))]
+    {:order_id              order-id
+     :evidence_status       ev-status
+     :incomplete_evidence   (not= ev-status "complete")
+     :evaluated_count       eval-cnt
+     :returned_count        (count rows)
+     :truncated             truncated
+     :omitted_count         omitted
+     :selected_candidate_id (:selected_candidate_id alloc-row)
+     :alternatives          (mapv format-alt rows)
+     :run                   run
+     :disclosures           standard-disclosures}))
+
+#_{:clj-kondo/ignore [:metabase/validate-defendpoint-has-response-schema]}
+(api.macros/defendpoint :get "/orders/:order-id/counterfactual"
+  "Read-only counterfactual trade-off inspection for forcing a candidate alternative."
+  [{:keys [order-id]} :- [:map {:closed true} [:order-id :string]]
+   {:keys [candidate_route_id run_id]} :- [:map {:closed true}
+                                           [:candidate_route_id :string]
+                                           [:run_id {:optional true} [:maybe :string]]]
+   _body _req]
+  (check-operations-access!)
+  (let [run      (resolve-pinned-run run_id)
+        pinned   (:run_id run)
+        cand-id  (parse-long (str candidate_route_id))
+        _        (when-not cand-id
+                   (throw (ex-info "Invalid candidate_route_id" {:status-code 400})))
+        alloc    (first (run-native-query
+                         "SELECT order_id, keg_size, pending_units, allocated_units,
+                                 freight_cost_inr, source_customer_id, source_hub, carrier
+                          FROM nubrix_poc_allocations
+                          WHERE run_id = ? AND order_id = ?
+                          LIMIT 1"
+                         [pinned order-id]))
+        _        (when-not alloc
+                   (throw (ex-info "Order not found" {:status-code 404})))
+        cand     (first (run-native-query
+                         "SELECT e.*, COALESCE(c.CustomerName, e.source_name, e.source_customer_id) AS resolved_source_name
+                          FROM nubrix_poc_candidate_evidence e
+                          LEFT JOIN dimCustomer c ON c.CustomerId = e.source_customer_id
+                          WHERE e.run_id = ? AND e.order_id = ? AND e.candidate_route_id = ?
+                          LIMIT 1"
+                         [pinned order-id cand-id]))
+        _        (when-not cand
+                   (throw (ex-info "Candidate not found" {:status-code 404})))
+        competing (run-native-query
+                   "SELECT order_id, destination_brewer, needed_by, allocated_units, ROUND(freight_cost_inr, 2) AS freight_cost_inr
+                    FROM nubrix_poc_allocations
+                    WHERE run_id = ? AND source_customer_id = ? AND keg_size = ? AND order_id != ? AND allocated_units > 0
+                    ORDER BY needed_by ASC, order_id ASC
+                    LIMIT 25"
+                   [pinned (:source_customer_id cand) (:keg_size alloc) order-id])
+        sel-freight (double (or (:freight_cost_inr alloc) 0.0))
+        alt-freight (double (or (:freight_cost_inr cand) 0.0))
+        delta       (- alt-freight sel-freight)
+        needed      (long (or (:candidate_quantity cand) (:allocated_units alloc) (:pending_units alloc) 0))
+        rem-stock   (long (or (:stock_remaining_kegs cand) 0))
+        shortfall-displaced (max 0 (- needed rem-stock))]
+    {:order_id             order-id
+     :candidate_route_id   cand-id
+     :target_source_id     (:source_customer_id cand)
+     :target_source_name   (:resolved_source_name cand)
+     :carrier_name         (:carrier_name cand)
+     :selected_freight_inr sel-freight
+     :alternative_freight_inr alt-freight
+     :standalone_freight_delta_inr delta
+     :needed_kegs          needed
+     :stock_available_kegs (:stock_available_kegs cand)
+     :stock_remaining_kegs rem-stock
+     :shortfall_if_forced_on_competing_kegs shortfall-displaced
+     :affected_orders      competing
+     :conclusion           (cond
+                             (truthy-flag? (:is_selected cand))
+                             "This option is the currently selected proposal."
+                             (and (neg? delta) (pos? shortfall-displaced) (seq competing))
+                             (format "Cheaper for this order alone (saves ₹%.2f standalone), but forcing this option requires %d kegs where only %d remain — displacing competing allocations (%s)."
+                                     (- delta) needed rem-stock (str/join ", " (map :order_id (take 3 competing))))
+                             (pos? shortfall-displaced)
+                             (format "Forcing this option requires %d kegs where %d remain at %s; %d kegs would be displaced."
+                                     needed rem-stock (:resolved_source_name cand) shortfall-displaced)
+                             :else
+                             (or (:rejection_reason cand) "Evaluated under global solver policy."))
+     :run                  run
+     :disclosures          standard-disclosures}))
 
 #_{:clj-kondo/ignore [:metabase/validate-defendpoint-has-response-schema]}
 (api.macros/defendpoint :get "/exceptions"

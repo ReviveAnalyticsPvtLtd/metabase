@@ -52,6 +52,10 @@ class CandidateOption:
     trip_start: int = 0
     trip_end: int = 0
     distributor_mode: str = "coordinator"
+    selected_candidate_id: Optional[int] = None
+    decision_stage: str = "UNALLOCATED"
+    omitted_candidates_count: int = 0
+    omitted_reason: Optional[str] = None
     route_legs: List[Tuple[str, str, int]] = field(default_factory=list)
 
 
@@ -87,6 +91,10 @@ class PlannerOutcome:
     trip_start: int = 0
     trip_end: int = 0
     distributor_mode: str = "coordinator"
+    selected_candidate_id: Optional[int] = None
+    decision_stage: str = "UNALLOCATED"
+    omitted_candidates_count: int = 0
+    omitted_reason: Optional[str] = None
 
 
 class InvariantValidationError(Exception):
@@ -188,6 +196,7 @@ class OrToolsFulfillmentPlanner:
         evidence_by_order: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
         order_urgency: Dict[str, int] = {}
         candidates_truncated = False
+        omitted_by_order: Dict[str, int] = {}
 
         # Compute earliest valid needed_by date for true due-date prioritization
         valid_needed_dates = []
@@ -258,9 +267,21 @@ class OrToolsFulfillmentPlanner:
                     directed_lanes=directed_lanes,
                 )
                 if resolved is None:
+                    src_name = customers.get(src_id, {}).get("name", src_id)
                     evidence_by_order[oid].append({
                         "reason": "missing_lane",
-                        "source": src_id,
+                        "reason_code": "MISSING_LANE",
+                        "source_customer_id": src_id,
+                        "source": src_name,
+                        "source_name": src_name,
+                        "distributor_customer_id": coord_dist_id,
+                        "distributor_name": coord_dist_name,
+                        "carrier_id": "CAR-NONE",
+                        "carrier": "Unassigned",
+                        "carrier_name": "Unassigned",
+                        "candidate_quantity": pending_qty,
+                        "stock_available_kegs": avail_qty,
+                        "is_feasible": False,
                         "details": f"No verified {'directed ' if directed_lanes else ''}road distance lane for {src_id} -> {dest_id} (mode={distributor_mode})",
                     })
                 else:
@@ -273,6 +294,9 @@ class OrToolsFulfillmentPlanner:
             sources_with_dist.sort(key=lambda s: s[2])
             if len(sources_with_dist) > self.max_candidates_per_order:
                 candidates_truncated = True
+                omitted_by_order[oid] = len(sources_with_dist) - self.max_candidates_per_order
+            else:
+                omitted_by_order[oid] = 0
 
             # Available carriers
             carrier_items = list(carriers.values()) if carriers else [
@@ -372,14 +396,27 @@ class OrToolsFulfillmentPlanner:
 
                         evidence_by_order[oid].append({
                             "candidate_id": candidate.candidate_id,
+                            "source_customer_id": src_id,
                             "source": src_name,
+                            "source_name": src_name,
+                            "distributor_customer_id": coord_dist_id,
+                            "distributor_name": coord_dist_name,
+                            "carrier_id": car_id,
                             "carrier": car_name,
+                            "carrier_name": car_name,
                             "vehicle": veh_id,
+                            "candidate_quantity": alloc_qty,
+                            "stock_available_kegs": avail_qty,
+                            "carrier_max_load_kegs": max_load,
+                            "distributor_mode": distributor_mode,
+                            "cost_formula": f"{alloc_qty} kegs * {km} km * INR {rate_inr:.2f}/keg-km",
                             "distance_km": km,
                             "transit_days": transit_days,
                             "is_feasible": is_feasible,
                             "slack_days": slack,
                             "freight_cost_inr": freight_inr,
+                            "reason_code": None if is_feasible else "DEADLINE_EXCEEDED",
+                            "reason": candidate.rejection_reason,
                             "route_legs": r_legs,
                         })
 
@@ -461,12 +498,16 @@ class OrToolsFulfillmentPlanner:
 
         # 3. Build Outcomes & Residual Partial-Allocation Pass
         selected_candidates: Dict[str, Tuple[CandidateOption, int]] = {}
+        selected_stage_by_order: Dict[str, str] = {}
+        allocations_by_source_sku: Dict[Tuple[str, str], List[Tuple[str, int]]] = defaultdict(list)
         remaining_stock = dict(stock_by_source_sku)
         used_vehicle_intervals: Dict[str, List[Tuple[int, int]]] = defaultdict(list)
         if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
             for c in feasible_candidates:
                 if solver.Value(choice_vars[c.candidate_id]) == 1:
                     selected_candidates[c.order_id] = (c, c.quantity)
+                    selected_stage_by_order[c.order_id] = "STAGE_1_CPSAT"
+                    allocations_by_source_sku[(c.source_customer_id, c.sku)].append((c.order_id, c.quantity))
                     remaining_stock[(c.source_customer_id, c.sku)] = (
                         remaining_stock.get((c.source_customer_id, c.sku), 0) - c.quantity
                     )
@@ -497,11 +538,87 @@ class OrToolsFulfillmentPlanner:
                 alloc_qty = min(c.quantity, rem)
                 if alloc_qty > 0:
                     selected_candidates[oid] = (c, alloc_qty)
+                    selected_stage_by_order[oid] = "STAGE_2_RESIDUAL"
+                    allocations_by_source_sku[(c.source_customer_id, c.sku)].append((oid, alloc_qty))
                     remaining_stock[(c.source_customer_id, c.sku)] = rem - alloc_qty
                     if c.vehicle_id is not None:
                         used_vehicle_intervals[c.vehicle_id].append((c.trip_start, c.trip_end))
                     stage2_modified = True
                     break
+
+        planning_mode = "MODE_B_TRIP_LEVEL" if vehicles else "MODE_A_ORDER_LEVEL"
+        objective_policy = "lexicographic_equivalent_weighted_v2"
+        split_policy = "single_source_per_order"
+        omitted_total = sum(omitted_by_order.values())
+
+        # Annotate every candidate evidence record with exact post-solve selection, remaining stock, competing orders, and reason code
+        for order in orders:
+            oid = order["id"]
+            sku = order["sku"]
+            chosen_pair = selected_candidates.get(oid)
+            chosen_cand = chosen_pair[0] if chosen_pair else None
+            chosen_qty = chosen_pair[1] if chosen_pair else 0
+            chosen_freight = (
+                calculate_freight_cost_inr(chosen_qty, chosen_cand.distance_km, chosen_cand.cost_per_keg_km)
+                if chosen_cand and chosen_qty > 0
+                else None
+            )
+            order_stage = selected_stage_by_order.get(oid, "UNALLOCATED")
+
+            for ev in evidence_by_order.get(oid, []):
+                if "candidate_id" not in ev:
+                    ev.setdefault("decision_stage", order_stage)
+                    ev.setdefault("is_selected", False)
+                    continue
+                cid_ev = ev["candidate_id"]
+                src_cid = ev.get("source_customer_id", "")
+                cand_qty = int(ev.get("candidate_quantity", 0) or 0)
+                avail_qty = int(ev.get("stock_available_kegs", 0) or 0)
+                rem_qty = int(remaining_stock.get((src_cid, sku), 0))
+                competing = [o2 for o2, _ in allocations_by_source_sku.get((src_cid, sku), []) if o2 != oid]
+                is_sel = bool(chosen_cand and chosen_qty > 0 and cid_ev == chosen_cand.candidate_id)
+
+                ev["is_selected"] = is_sel
+                ev["decision_stage"] = order_stage
+                ev["stock_remaining_kegs"] = rem_qty
+                ev["competing_order_ids"] = competing[:5]
+
+                if is_sel:
+                    if chosen_qty != cand_qty:
+                        ev["candidate_quantity"] = chosen_qty
+                        ev["freight_cost_inr"] = chosen_freight
+                        ev["cost_formula"] = f"{chosen_qty} kegs * {ev['distance_km']} km * INR {chosen_cand.cost_per_keg_km:.2f}/keg-km (Stage 2 residual)"
+                    ev["reason_code"] = "SELECTED_RESIDUAL" if order_stage == "STAGE_2_RESIDUAL" else "SELECTED_PRIMARY"
+                    ev["reason"] = f"Selected in {order_stage} ({chosen_qty} kegs from {src_cid} via {ev.get('carrier_name')})."
+                elif ev.get("is_feasible") is False:
+                    ev["reason_code"] = ev.get("reason_code") or "DEADLINE_EXCEEDED"
+                elif rem_qty < cand_qty and competing:
+                    ev["reason_code"] = "STOCK_COMMITTED_COMPETING_ORDERS"
+                    used_by_others = max(0, avail_qty - rem_qty)
+                    sample_comp = ", ".join(competing[:3])
+                    suffix = f" (+{len(competing) - 3} more)" if len(competing) > 3 else ""
+                    ev["reason"] = (
+                        f"Source {src_cid} had {avail_qty} {sku} kegs; {used_by_others} committed to "
+                        f"{sample_comp}{suffix}, leaving {rem_qty} kegs (needed {cand_qty})."
+                    )
+                elif chosen_cand and chosen_freight is not None and float(ev.get("freight_cost_inr", 0)) > chosen_freight:
+                    ev["reason_code"] = "HIGHER_MODELED_FREIGHT"
+                    ev["reason"] = (
+                        f"Feasible, but modeled freight (INR {float(ev['freight_cost_inr']):,.2f} for {cand_qty} kegs) "
+                        f"exceeds selected option (INR {chosen_freight:,.2f} for {chosen_qty} kegs)."
+                    )
+                elif chosen_cand and cand_qty < chosen_qty:
+                    ev["reason_code"] = "LOWER_COVERAGE_QUANTITY"
+                    ev["reason"] = f"Selected option covers more demand ({chosen_qty} vs {cand_qty} kegs)."
+                elif chosen_cand:
+                    ev["reason_code"] = "GLOBAL_OBJECTIVE_TRADEOFF"
+                    ev["reason"] = (
+                        f"Not selected under {objective_policy} "
+                        f"({len(competing)} competing orders on {src_cid}, {rem_qty} {sku} kegs remaining)."
+                    )
+                else:
+                    ev["reason_code"] = "SOLVER_UNALLOCATED"
+                    ev["reason"] = "Order unallocated under CP-SAT and Stage 2 residual constraints."
 
         horizon_truncated = bool(snapshot.get("provenance", {}).get("horizon_truncated", False))
         if status == cp_model.OPTIMAL:
@@ -551,9 +668,9 @@ class OrToolsFulfillmentPlanner:
                     else ("Partially covered" if sel_qty > 0 else "No allocation")
                 )
                 explanation = (
-                    f"Optimally allocated {sel_qty} kegs ({sku}) from {chosen.source_name} via {chosen.distributor_name}. "
-                    f"Transport by {chosen.carrier_name} over {chosen.distance_km} km ({chosen.transit_days}d transit). "
-                    f"Arrives on-schedule with {chosen.slack_days}d margin."
+                    f"Proposed {sel_qty} kegs ({sku}) from {chosen.source_name} via {chosen.distributor_name}. "
+                    f"Modeled carrier {chosen.carrier_name} over {chosen.distance_km} km ({chosen.transit_days}d transit). "
+                    f"Within deadline window with {chosen.slack_days}d slack."
                     if is_on_time
                     else f"Source {chosen.source_name} allocated {sel_qty} kegs, but transit time ({chosen.transit_days}d) "
                     f"exceeds deadline slack by {-chosen.slack_days}d."
@@ -591,6 +708,14 @@ class OrToolsFulfillmentPlanner:
                         trip_start=chosen.trip_start,
                         trip_end=chosen.trip_end,
                         distributor_mode=chosen.distributor_mode,
+                        selected_candidate_id=chosen.candidate_id,
+                        decision_stage=selected_stage_by_order.get(oid, "STAGE_1_CPSAT"),
+                        omitted_candidates_count=omitted_by_order.get(oid, 0),
+                        omitted_reason=(
+                            f"Evaluated top {self.max_candidates_per_order} nearest sources; {omitted_by_order.get(oid, 0)} farther sources omitted."
+                            if omitted_by_order.get(oid, 0) > 0
+                            else None
+                        ),
                     )
                 )
             else:
@@ -640,6 +765,14 @@ class OrToolsFulfillmentPlanner:
                         planning_status="No allocation",
                         explanation=f"Shortfall: {reason}.",
                         evidence=evidence_by_order.get(oid, []),
+                        selected_candidate_id=None,
+                        decision_stage="UNALLOCATED",
+                        omitted_candidates_count=omitted_by_order.get(oid, 0),
+                        omitted_reason=(
+                            f"Evaluated top {self.max_candidates_per_order} nearest sources; {omitted_by_order.get(oid, 0)} farther sources omitted."
+                            if omitted_by_order.get(oid, 0) > 0
+                            else None
+                        ),
                     )
                 )
 
@@ -668,6 +801,12 @@ class OrToolsFulfillmentPlanner:
 
         return {
             "solver_status": solver_status_name,
+            "planning_mode": planning_mode,
+            "objective_policy": objective_policy,
+            "split_policy": split_policy,
+            "max_candidates_per_order": self.max_candidates_per_order,
+            "omitted_candidates_total": omitted_total,
+            "stage2_modified": stage2_modified,
             "vehicle_mode": "interval_no_overlap" if vehicles else "carrier_max_load_only (no_truck_table)",
             "distributor_mode": distributor_mode,
             "directed_lanes": directed_lanes,

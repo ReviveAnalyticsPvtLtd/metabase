@@ -1,6 +1,7 @@
 import type {
   InventoryListResponse,
   OrderAlternativesResponse,
+  OrderCounterfactualResponse,
   OrderDetailResponse,
   OrdersListResponse,
 } from "./types";
@@ -62,6 +63,15 @@ export function fetchOrderAlternatives(
 ): Promise<OrderAlternativesResponse> {
   return fetchJson<OrderAlternativesResponse>(
     `/api/operations/orders/${encodeURIComponent(orderId)}/alternatives`,
+  );
+}
+
+export function fetchOrderCounterfactual(
+  orderId: string,
+  candidateRouteId: number,
+): Promise<OrderCounterfactualResponse> {
+  return fetchJson<OrderCounterfactualResponse>(
+    `/api/operations/orders/${encodeURIComponent(orderId)}/counterfactual?candidate_route_id=${encodeURIComponent(String(candidateRouteId))}`,
   );
 }
 

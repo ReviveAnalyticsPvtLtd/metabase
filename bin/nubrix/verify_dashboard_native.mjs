@@ -300,15 +300,15 @@ try {
   const ordersPage = ordersEval.result?.value || {};
   assert(ordersPage.text.includes("Order Fulfillment Queue"), "Expected OrdersPage heading");
   assert(ordersPage.text.includes("Simulated scenario"), "Expected SimulationBanner on OrdersPage");
-  assert(!ordersPage.text.includes("RUN-20261124"), "Expected no raw run ID in normal OrdersPage view");
+  assert(!ordersPage.text.includes("RUN-20261126"), "Expected no raw run ID in normal OrdersPage view");
 
-  console.log("Navigating to /operations/orders/ORD-008116...");
-  await call("Page.navigate", { url: `${BASE}/operations/orders/ORD-008116` });
+  console.log("Navigating to /operations/orders/ORD-000663...");
+  await call("Page.navigate", { url: `${BASE}/operations/orders/ORD-000663` });
   let detailPage = { url: "", text: "" };
   for (let i = 0; i < 10; i++) {
     await delay(2500);
     const detailEval = await call("Runtime.evaluate", {
-      expression: `({ url: location.href, text: document.body.innerText.slice(0, 12000) })`,
+      expression: `({ url: location.href, text: document.body.innerText })`,
       returnByValue: true,
     });
     detailPage = detailEval.result?.value || {};
@@ -316,12 +316,33 @@ try {
       break;
     }
   }
-  assert(detailPage.text.includes("ORD-008116"), "Expected ORD-008116 on OrderDetailPage");
+  assert(detailPage.text.includes("ORD-000663"), "Expected ORD-000663 on OrderDetailPage");
   assert(detailPage.text.includes("Proposed fulfillment journey"), "Expected fulfillment journey on OrderDetailPage");
+  assert(detailPage.text.includes("Schematic connection — not a road route"), "Expected schematic route label on OrderDetailPage");
   assert(detailPage.text.includes("Why this plan?"), "Expected Why this plan? on OrderDetailPage");
+  assert(detailPage.text.includes("Planning mode: Order-level allocation"), "Expected explicit Mode A policy on OrderDetailPage");
   assert(detailPage.text.includes("Evaluated alternatives"), "Expected Evaluated alternatives on OrderDetailPage");
-  assert(detailPage.text.includes("Shared-trip information is not available for this proposed plan."), "Expected shared-trip disclosure on OrderDetailPage");
-  assert(!detailPage.text.includes("RUN-20261124"), "Expected no raw run ID in normal OrderDetailPage view");
+  assert(detailPage.text.includes("No validated shared-trip record is available for this proposal."), "Expected shared-trip disclosure on OrderDetailPage");
+  assert(!detailPage.text.includes("RUN-20261126"), "Expected no raw run ID in normal OrderDetailPage view");
+
+  console.log("Testing counterfactual trade-off button on OrderDetailPage...");
+  await call("Runtime.evaluate", {
+    expression: `Array.from(document.querySelectorAll("button")).find(b => b.innerText.trim() === "Inspect")?.click()`,
+    returnByValue: true,
+  });
+  let cfText = "";
+  for (let i = 0; i < 6; i++) {
+    await delay(1500);
+    const cfEval = await call("Runtime.evaluate", {
+      expression: `document.body.innerText`,
+      returnByValue: true,
+    });
+    cfText = cfEval.result?.value || "";
+    if (cfText.includes("Counterfactual Trade-Off:")) {
+      break;
+    }
+  }
+  assert(cfText.includes("Counterfactual Trade-Off:"), "Expected Counterfactual Trade-Off panel on OrderDetailPage");
 
   console.log("Navigating to /operations/exceptions...");
   await call("Page.navigate", { url: `${BASE}/operations/exceptions` });

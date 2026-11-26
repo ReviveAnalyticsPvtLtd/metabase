@@ -21,6 +21,11 @@ export interface OperationsRunSummary {
   orders_uncovered: number;
   kegs_ordered: number;
   kegs_allocated: number;
+  planning_mode?: string;
+  objective_policy?: string;
+  split_policy?: string;
+  omitted_candidates_total?: number;
+  max_candidates_per_order?: number;
 }
 
 export interface OrderQueueItem {
@@ -82,12 +87,33 @@ export interface OrderDetailItem extends OrderQueueItem {
   dist_role: string | null;
   reconciled: boolean;
   distributor_mode: string;
+  selected_candidate_id?: number | null;
+  decision_stage?: string | null;
+  omitted_candidates_count?: number;
+  cost_formula?: string | null;
   why_this_plan: string;
   timeline: OrderTimelineItem[];
 }
 
+export interface ConsistencyCheck {
+  passed: boolean;
+  warnings: string[];
+}
+
+export interface PlanningPolicy {
+  mode: string;
+  split_policy: string;
+  objective_policy: string;
+  decision_stage: string;
+  trip_capability: boolean;
+  shared_trip_message: string;
+  map_mode: string;
+}
+
 export interface OrderDetailResponse {
   order: OrderDetailItem;
+  consistency_check?: ConsistencyCheck;
+  planning_policy?: PlanningPolicy;
   run: OperationsRunSummary;
   disclosures: OperationsDisclosures;
 }
@@ -106,13 +132,55 @@ export interface OrderAlternative {
   slack_days: number;
   is_selected: number;
   selected: boolean;
+  feasible?: boolean;
+  candidate_quantity?: number | null;
+  stock_available_kegs?: number | null;
+  stock_remaining_kegs?: number | null;
+  carrier_max_load_kegs?: number | null;
+  reason_code?: string | null;
+  competing_order_ids?: string | null;
+  decision_stage?: string | null;
+  cost_formula?: string | null;
   rejection_reason: string | null;
 }
 
 export interface OrderAlternativesResponse {
   order_id: string;
+  evidence_status?: "complete" | "partial" | "empty" | "error";
   incomplete_evidence: boolean;
+  evaluated_count?: number;
+  returned_count?: number;
+  truncated?: boolean;
+  omitted_count?: number;
+  selected_candidate_id?: number | null;
   alternatives: OrderAlternative[];
+  run: OperationsRunSummary;
+  disclosures: OperationsDisclosures;
+}
+
+export interface CounterfactualAffectedOrder {
+  order_id: string;
+  destination_brewer: string;
+  needed_by: string;
+  allocated_units: number;
+  freight_cost_inr: number;
+}
+
+export interface OrderCounterfactualResponse {
+  order_id: string;
+  candidate_route_id: number;
+  target_source_id: string;
+  target_source_name: string;
+  carrier_name: string;
+  selected_freight_inr: number;
+  alternative_freight_inr: number;
+  standalone_freight_delta_inr: number;
+  needed_kegs: number;
+  stock_available_kegs: number | null;
+  stock_remaining_kegs: number;
+  shortfall_if_forced_on_competing_kegs: number;
+  affected_orders: CounterfactualAffectedOrder[];
+  conclusion: string;
   run: OperationsRunSummary;
   disclosures: OperationsDisclosures;
 }

@@ -166,10 +166,10 @@ describe("MicroStar Operations Workspace", () => {
     renderWithProviders(<OrderDetailPage />);
     expect(await screen.findByText("ORD-008116")).toBeInTheDocument();
     expect(screen.getByText("Schematic connection — not a road route")).toBeInTheDocument();
-    expect(screen.getByText("Shared-trip information is not available for this proposed plan.")).toBeInTheDocument();
+    expect(screen.getByText("No validated shared-trip record is available for this proposal.")).toBeInTheDocument();
     expect(screen.getByText("Coordinator (not a physical stop)")).toBeInTheDocument();
     await waitFor(() => {
-      expect(screen.getByText("Chosen within modeled bounds")).toBeInTheDocument();
+      expect(screen.getByText("Selected in optimization run")).toBeInTheDocument();
     });
     expect(screen.queryByText("RUN-INTERNAL-HIDDEN")).not.toBeInTheDocument();
   });

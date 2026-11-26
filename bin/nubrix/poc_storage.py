@@ -119,11 +119,45 @@ class PocStorageManager:
 
     def init_schema(self) -> None:
         """Create versioned POC tables idempotently without affecting live tables."""
+        extra_columns = [
+            ("nubrix_poc_runs", "planning_mode", "VARCHAR(64) NULL"),
+            ("nubrix_poc_runs", "objective_policy", "VARCHAR(64) NULL"),
+            ("nubrix_poc_runs", "split_policy", "VARCHAR(64) NULL"),
+            ("nubrix_poc_runs", "omitted_candidates_total", "INT NULL"),
+            ("nubrix_poc_allocations", "selected_candidate_id", "INT NULL"),
+            ("nubrix_poc_allocations", "decision_stage", "VARCHAR(32) NULL"),
+            ("nubrix_poc_allocations", "carrier_id", "VARCHAR(64) NULL"),
+            ("nubrix_poc_allocations", "distributor_mode", "VARCHAR(32) NULL"),
+            ("nubrix_poc_allocations", "omitted_candidates_count", "INT DEFAULT 0"),
+            ("nubrix_poc_candidate_evidence", "source_name", "VARCHAR(255) NULL"),
+            ("nubrix_poc_candidate_evidence", "distributor_customer_id", "VARCHAR(64) NULL"),
+            ("nubrix_poc_candidate_evidence", "distributor_name", "VARCHAR(255) NULL"),
+            ("nubrix_poc_candidate_evidence", "carrier_id", "VARCHAR(64) NULL"),
+            ("nubrix_poc_candidate_evidence", "candidate_quantity", "INT NULL"),
+            ("nubrix_poc_candidate_evidence", "stock_available_kegs", "INT NULL"),
+            ("nubrix_poc_candidate_evidence", "stock_remaining_kegs", "INT NULL"),
+            ("nubrix_poc_candidate_evidence", "carrier_max_load_kegs", "INT NULL"),
+            ("nubrix_poc_candidate_evidence", "is_feasible", "TINYINT(1) NULL"),
+            ("nubrix_poc_candidate_evidence", "reason_code", "VARCHAR(64) NULL"),
+            ("nubrix_poc_candidate_evidence", "competing_order_ids", "VARCHAR(255) NULL"),
+            ("nubrix_poc_candidate_evidence", "decision_stage", "VARCHAR(32) NULL"),
+            ("nubrix_poc_candidate_evidence", "cost_formula", "VARCHAR(255) NULL"),
+        ]
         conn = self._get_connection()
         try:
             with conn.cursor() as cursor:
                 for ddl in CREATE_TABLES_SQL:
                     cursor.execute(ddl)
+                for table_name, col_name, col_def in extra_columns:
+                    cursor.execute(
+                        """
+                        SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+                        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND COLUMN_NAME = %s
+                        """,
+                        (table_name, col_name),
+                    )
+                    if cursor.fetchone()[0] == 0:
+                        cursor.execute(f"ALTER TABLE `{table_name}` ADD COLUMN `{col_name}` {col_def}")
             conn.commit()
         finally:
             conn.close()
@@ -176,8 +210,9 @@ class PocStorageManager:
                     INSERT INTO nubrix_poc_runs (
                         run_id, created_at, as_of_date, solver_status, orders_total,
                         orders_fully_covered, orders_partially_covered, orders_uncovered,
-                        kegs_ordered, kegs_allocated, total_freight_inr, provenance_json, is_active
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        kegs_ordered, kegs_allocated, total_freight_inr, provenance_json, is_active,
+                        planning_mode, objective_policy, split_policy, omitted_candidates_total
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     run_id, now_dt, as_of_date.strftime("%Y-%m-%d"),
                     plan_result.get("solver_status", "optimal_over_candidates"),
@@ -185,6 +220,10 @@ class PocStorageManager:
                     total_ordered, total_allocated, total_freight,
                     json.dumps(plan_result.get("provenance", {})),
                     1 if set_active else 0,
+                    plan_result.get("planning_mode", "MODE_A_ORDER_LEVEL"),
+                    plan_result.get("objective_policy", "lexicographic_equivalent_weighted_v2"),
+                    plan_result.get("split_policy", "single_source_per_order"),
+                    plan_result.get("omitted_candidates_total"),
                 ))
 
                 # Insert Allocations
@@ -196,11 +235,13 @@ class PocStorageManager:
                         proposed_on_time_units, uncovered_units, source_hub, source_customer_id,
                         distributor, distributor_customer_id, carrier, distance_km,
                         freight_cost_inr, transit_days, on_time_feasible, planning_status,
-                        explanation, planning_basis, is_active_run
+                        explanation, planning_basis, is_active_run,
+                        selected_candidate_id, decision_stage, carrier_id, distributor_mode, omitted_candidates_count
                     ) VALUES (
                         %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                         %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s
                     )
                 """
                 alloc_data = [
@@ -213,6 +254,8 @@ class PocStorageManager:
                         a["freight_cost_inr"], a["transit_days"], a["on_time_feasible"], a["planning_status"],
                         a["explanation"], a.get("planning_basis", "Deterministic OR-Tools Optimization"),
                         1 if set_active else 0,
+                        a.get("selected_candidate_id"), a.get("decision_stage"), a.get("carrier_id"),
+                        a.get("distributor_mode", "coordinator"), int(a.get("omitted_candidates_count", 0) or 0),
                     )
                     for a in allocations
                 ]
@@ -224,14 +267,27 @@ class PocStorageManager:
                         INSERT INTO nubrix_poc_candidate_evidence (
                             evidence_id, run_id, order_id, candidate_route_id, source_customer_id,
                             carrier_name, distance_km, freight_cost_inr, transit_days, slack_days,
-                            is_selected, rejection_reason
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            is_selected, rejection_reason,
+                            source_name, distributor_customer_id, distributor_name, carrier_id,
+                            candidate_quantity, stock_available_kegs, stock_remaining_kegs,
+                            carrier_max_load_kegs, is_feasible, reason_code, competing_order_ids,
+                            decision_stage, cost_formula
+                        ) VALUES (
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                        )
                     """
                     evid_data = [
                         (
                             e["evidence_id"], run_id, e["order_id"], e["candidate_route_id"], e["source_customer_id"],
                             e["carrier_name"], e["distance_km"], e["freight_cost_inr"], e["transit_days"], e["slack_days"],
                             1 if e["is_selected"] else 0, e.get("rejection_reason"),
+                            e.get("source_name"), e.get("distributor_customer_id"), e.get("distributor_name"),
+                            e.get("carrier_id"), e.get("candidate_quantity"), e.get("stock_available_kegs"),
+                            e.get("stock_remaining_kegs"), e.get("carrier_max_load_kegs"),
+                            (1 if e["is_feasible"] else 0) if e.get("is_feasible") is not None else None,
+                            e.get("reason_code"), e.get("competing_order_ids"),
+                            e.get("decision_stage"), e.get("cost_formula"),
                         )
                         for e in evidence_list
                     ]

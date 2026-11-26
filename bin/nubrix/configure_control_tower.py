@@ -781,8 +781,8 @@ def configure_dashboard_layout_and_wiring(token: str, extra_cards: Optional[Dict
             banner_text = (
                 "# MicroStar Keg Fulfillment Control Tower\n"
                 "**Simulated scenario · Proposed plan — not a booking** · "
-                "Showing the current planning horizon: **1,000** orders of 9,899 open orders (**62,030** proposed kegs, **₹4,565,913** estimated freight). "
-                "Open **[Orders Workspace](/operations/orders)** or **[Exceptions Queue](/operations/exceptions)** to inspect individual order plans and alternatives. "
+                "Mode A (order-level single-source allocation) · Showing the current planning horizon: **1,000** orders of 9,899 open orders (**62,230** proposed kegs, **₹11,626,115** estimated freight). "
+                "Open **[Orders Workspace](/operations/orders)** or **[Exceptions Queue](/operations/exceptions)** to inspect individual order plans, trade-offs, and alternatives. "
                 "*Synthetic road/cost proxies; Railway has no Truck or InventoryReservation table.*"
             )
             viz["text"] = banner_text

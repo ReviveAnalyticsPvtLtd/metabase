@@ -20,6 +20,7 @@ from adapters import RailwayWarehouseAdapter
 from fulfillment_planner import NearestSourceBaselinePlanner, OrToolsFulfillmentPlanner
 from grounded_ai import GroundedAssistant
 from poc_storage import PocStorageManager
+from snapshot_validator import validate_snapshot
 
 
 def get_railway_params() -> Dict[str, Any]:
@@ -64,6 +65,11 @@ def main() -> int:
     snapshot["provenance"]["total_open_orders"] = total_open_orders
     snapshot["provenance"]["planning_horizon_orders"] = len(snapshot["orders"])
     snapshot["provenance"]["horizon_truncated"] = len(snapshot["orders"]) < total_open_orders
+    validation = validate_snapshot(snapshot)
+    snapshot["provenance"]["validation_warnings"] = validation.warnings
+    snapshot["provenance"]["validation_summary"] = validation.summary
+    if not validation.ok:
+        raise RuntimeError(f"Snapshot preflight validation failed: {validation.errors[:5]}")
     print(
         f"Snapshot loaded in {time.time() - t0:.2f}s (adapter_status={adapter_result.status}): "
         f"{total_open_orders} total open orders (planning horizon: {len(snapshot['orders'])} earliest-due), "
@@ -91,8 +97,14 @@ def main() -> int:
     # 3. Run OR-Tools CP-SAT Planner
     print("\n[3/5] Running OrToolsFulfillmentPlanner (CP-SAT)...")
     t_opt = time.time()
-    ortools_planner = OrToolsFulfillmentPlanner(time_limit_seconds=args.time_limit, max_candidates_per_order=5)
+    ortools_planner = OrToolsFulfillmentPlanner(time_limit_seconds=args.time_limit, max_candidates_per_order=12)
     ortools_result = ortools_planner.plan(snapshot)
+    snapshot["provenance"]["planning_mode"] = ortools_result.get("planning_mode")
+    snapshot["provenance"]["objective_policy"] = ortools_result.get("objective_policy")
+    snapshot["provenance"]["split_policy"] = ortools_result.get("split_policy")
+    snapshot["provenance"]["max_candidates_per_order"] = ortools_result.get("max_candidates_per_order")
+    snapshot["provenance"]["omitted_candidates_total"] = ortools_result.get("omitted_candidates_total")
+    snapshot["provenance"]["stage2_modified"] = ortools_result.get("stage2_modified")
     opt_time = time.time() - t_opt
     opt_on_time_kegs = ortools_result["total_on_time_kegs"]
     opt_cost_per_keg = (ortools_result["total_freight_cost_inr"] / opt_on_time_kegs) if opt_on_time_kegs else 0.0
@@ -144,6 +156,11 @@ def main() -> int:
             "planning_status": outcome.planning_status,
             "explanation": outcome.explanation,
             "planning_basis": f"OR-Tools CP-SAT ({ortools_result['solver_status']})",
+            "selected_candidate_id": outcome.selected_candidate_id,
+            "decision_stage": outcome.decision_stage,
+            "carrier_id": next((c["id"] for c in snapshot.get("carriers", {}).values() if c.get("name") == outcome.carrier), None),
+            "distributor_mode": outcome.distributor_mode,
+            "omitted_candidates_count": outcome.omitted_candidates_count,
         })
 
         missing_lane_seen = False
@@ -153,25 +170,20 @@ def main() -> int:
                 if missing_lane_seen:
                     continue
                 missing_lane_seen = True
-            if "candidate_id" in ev or reason in ("overdue", "no_stock_for_sku", "missing_lane"):
-                is_sel = bool(
-                    "candidate_id" in ev
-                    and outcome.allocated_units > 0
-                    and ev.get("source") == outcome.source_hub
-                    and ev.get("carrier") == outcome.carrier
-                )
+            if "candidate_id" in ev or reason in ("overdue", "no_stock_for_sku", "missing_lane", "carrier_capacity_zero", "vehicle_unavailable", "vehicle_window_conflict"):
+                is_sel = bool(ev.get("is_selected"))
                 rej_reason = reason
                 if not rej_reason and ev.get("is_feasible") is False:
                     rej_reason = f"Transit ({ev.get('transit_days')}d) exceeds slack ({ev.get('slack_days')}d)"
-                elif not rej_reason and outcome.allocated_units == 0 and "candidate_id" in ev:
-                    rej_reason = "Source exhausted by higher-priority orders"
-                cand_route_id = int(ev.get("candidate_id", ev_idx + 1))
-                src_cid = str(ev.get("source", outcome.source_customer_id or "UNKNOWN"))
-                car_name = str(ev.get("carrier", outcome.carrier))
+                cand_route_id = int(ev.get("candidate_id", -(ev_idx + 1)))
+                src_cid = str(ev.get("source_customer_id") or outcome.source_customer_id or "UNKNOWN")
+                src_name = str(ev.get("source_name") or ev.get("source") or outcome.source_hub)
+                car_name = str(ev.get("carrier_name") or ev.get("carrier") or outcome.carrier)
                 dist_km = int(ev.get("distance_km", outcome.distance_km))
                 freight_inr = float(ev.get("freight_cost_inr", ev.get("freight_inr", outcome.freight_cost_inr)))
                 t_days = int(ev.get("transit_days", outcome.transit_days))
                 s_days = int(ev.get("slack_days", 0))
+                competing_str = ",".join(ev.get("competing_order_ids") or [])[:255] or None
                 if len(src_cid) > 64 or len(car_name) > 100 or (rej_reason and len(rej_reason) > 255):
                     raise ValueError(f"Evidence field exceeds MySQL column width on {outcome.order_id}")
                 evidence_list.append({
@@ -179,6 +191,10 @@ def main() -> int:
                     "order_id": outcome.order_id,
                     "candidate_route_id": cand_route_id,
                     "source_customer_id": src_cid,
+                    "source_name": src_name,
+                    "distributor_customer_id": ev.get("distributor_customer_id"),
+                    "distributor_name": ev.get("distributor_name"),
+                    "carrier_id": ev.get("carrier_id"),
                     "carrier_name": car_name,
                     "distance_km": dist_km,
                     "freight_cost_inr": freight_inr,
@@ -186,6 +202,15 @@ def main() -> int:
                     "slack_days": s_days,
                     "is_selected": is_sel,
                     "rejection_reason": rej_reason,
+                    "candidate_quantity": ev.get("candidate_quantity"),
+                    "stock_available_kegs": ev.get("stock_available_kegs"),
+                    "stock_remaining_kegs": ev.get("stock_remaining_kegs"),
+                    "carrier_max_load_kegs": ev.get("carrier_max_load_kegs"),
+                    "is_feasible": ev.get("is_feasible"),
+                    "reason_code": ev.get("reason_code"),
+                    "competing_order_ids": competing_str,
+                    "decision_stage": ev.get("decision_stage"),
+                    "cost_formula": ev.get("cost_formula"),
                 })
 
     if args.publish:

@@ -12,10 +12,18 @@ import {
   Title,
 } from "metabase/ui";
 
-import { fetchOrderAlternatives, fetchOrderDetail } from "../api";
+import {
+  fetchOrderAlternatives,
+  fetchOrderCounterfactual,
+  fetchOrderDetail,
+} from "../api";
 import { SimulationBanner } from "../components/SimulationBanner";
 import { StatusBadge } from "../components/StatusBadge";
-import type { OrderAlternativesResponse, OrderDetailResponse } from "../types";
+import type {
+  OrderAlternativesResponse,
+  OrderCounterfactualResponse,
+  OrderDetailResponse,
+} from "../types";
 
 export function OrderDetailPage() {
   const navigate = useNavigate();
@@ -23,6 +31,9 @@ export function OrderDetailPage() {
 
   const [detail, setDetail] = useState<OrderDetailResponse | null>(null);
   const [alts, setAlts] = useState<OrderAlternativesResponse | null>(null);
+  const [counterfactual, setCounterfactual] = useState<OrderCounterfactualResponse | null>(null);
+  const [cfLoading, setCfLoading] = useState(false);
+  const [cfError, setCfError] = useState<string | null>(null);
   const [showWhy, setShowWhy] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -34,6 +45,8 @@ export function OrderDetailPage() {
     let cancelled = false;
     setLoading(true);
     setError(null);
+    setCounterfactual(null);
+    setCfError(null);
     Promise.all([
       fetchOrderDetail(orderId),
       fetchOrderAlternatives(orderId).catch(() => null),
@@ -81,7 +94,21 @@ export function OrderDetailPage() {
     );
   }
 
-  const { order, run, disclosures } = detail;
+  const { order, run, disclosures, consistency_check, planning_policy } = detail;
+
+  const handleInspectTradeoff = (candidateRouteId: number) => {
+    setCfLoading(true);
+    setCfError(null);
+    fetchOrderCounterfactual(orderId, candidateRouteId)
+      .then((res) => {
+        setCounterfactual(res);
+        setCfLoading(false);
+      })
+      .catch((err) => {
+        setCfError(err instanceof Error ? err.message : t`Could not load trade-off analysis.`);
+        setCfLoading(false);
+      });
+  };
   const hasValidCoords =
     order.src_lat != null &&
     order.src_lng != null &&
@@ -111,6 +138,14 @@ export function OrderDetailPage() {
         <Box p="md" mb="md" style={{ border: "1px solid var(--mb-color-error)", borderRadius: 8 }}>
           <Text c="error" fw={600}>
             {t`Data-quality warning: ordered, fulfilled, proposed, and uncovered quantities do not reconcile.`}
+          </Text>
+        </Box>
+      )}
+
+      {consistency_check && !consistency_check.passed && (
+        <Box p="md" mb="md" style={{ border: "1px solid #F29900", backgroundColor: "#FEF7E0", borderRadius: 8 }}>
+          <Text fw={600} style={{ color: "#B06000" }}>
+            {t`Evidence consistency warning: ${consistency_check.warnings.join(" ")}`}
           </Text>
         </Box>
       )}
@@ -228,7 +263,40 @@ export function OrderDetailPage() {
               <Text size="xs" c="text-secondary" mb="xs">
                 {t`Schematic connection — not a road route`}
               </Text>
-              <Text size="sm">
+              <svg
+                width="100%"
+                height="92"
+                viewBox="0 0 420 92"
+                role="img"
+                aria-label={t`Schematic connection from ${order.source_hub} to ${order.destination_brewer}`}
+                style={{ display: "block", marginBottom: 8 }}
+              >
+                <line
+                  x1="60"
+                  y1="38"
+                  x2="360"
+                  y2="38"
+                  stroke="#509EE3"
+                  strokeWidth="2.5"
+                  strokeDasharray="6 4"
+                />
+                <circle cx="60" cy="38" r="14" fill="#E8F0FE" stroke="#1967D2" strokeWidth="2" />
+                <text x="60" y="42" textAnchor="middle" fontSize="11" fontWeight="700" fill="#1967D2">1</text>
+                <circle cx="360" cy="38" r="14" fill="#EDE7F6" stroke="#4527A0" strokeWidth="2" />
+                <text x="360" y="42" textAnchor="middle" fontSize="11" fontWeight="700" fill="#4527A0">2</text>
+                <text x="210" y="28" textAnchor="middle" fontSize="11" fill="#5F6368">
+                  {order.allocated_units > 0
+                    ? `${order.distance_km} km modeled · ~${order.transit_days}d`
+                    : t`No modeled leg`}
+                </text>
+                <text x="60" y="72" textAnchor="middle" fontSize="11" fill="#3C4043">
+                  {order.source_customer_id || t`Unallocated`}
+                </text>
+                <text x="360" y="72" textAnchor="middle" fontSize="11" fill="#3C4043">
+                  {order.destination_customer_id}
+                </text>
+              </svg>
+              <Text size="xs" c="text-secondary">
                 {t`Source (${Number(order.src_lat).toFixed(2)}, ${Number(order.src_lng).toFixed(2)}) → Destination (${Number(order.dest_lat).toFixed(2)}, ${Number(order.dest_lng).toFixed(2)})`}
               </Text>
             </>
@@ -281,18 +349,41 @@ export function OrderDetailPage() {
             {showWhy ? t`Hide` : t`Expand`}
           </Button>
         </Flex>
-        {showWhy && <Text size="sm">{order.why_this_plan}</Text>}
+        {showWhy && (
+          <>
+            <Text size="sm" mb="xs">{order.why_this_plan}</Text>
+            <Group gap="md" wrap="wrap">
+              <Text size="xs" c="text-secondary">
+                {t`Planning mode: Order-level allocation (single-source allocation per order)`}
+              </Text>
+              {planning_policy?.decision_stage && (
+                <Text size="xs" c="text-secondary">
+                  {t`Decision stage: ${planning_policy.decision_stage}`}
+                </Text>
+              )}
+              {order.cost_formula && (
+                <Text size="xs" c="text-secondary">
+                  {t`Cost basis: ${order.cost_formula}`}
+                </Text>
+              )}
+            </Group>
+          </>
+        )}
       </Box>
 
       {/* Evaluated Alternatives */}
       <Box p="md" mb="md" style={{ border: "1px solid var(--mb-color-border)", borderRadius: 8 }}>
         <Title order={4} mb={4}>{t`Evaluated alternatives`}</Title>
         <Text size="xs" c="text-secondary" mb="sm">
-          {t`Candidates are evaluated across the full 1,000-order horizon; cheaper feasible lanes may be skipped when their stock or carrier capacity is committed to competing orders.`}
+          {alts && alts.truncated
+            ? t`Showing ${alts.returned_count ?? alts.alternatives.length} of ${alts.evaluated_count ?? alts.alternatives.length} evaluated candidates${alts.omitted_count ? ` (${alts.omitted_count} farther sources omitted by source cap)` : ""}. Bounded search — not guaranteed global optimum.`
+            : t`Showing all ${alts?.alternatives.length ?? 0} evaluated candidates for this order.`}
         </Text>
-        {!alts || alts.incomplete_evidence || alts.alternatives.length === 0 ? (
+        {!alts || alts.alternatives.length === 0 ? (
           <Text size="sm" c="text-secondary">
-            {t`Alternative evidence is incomplete for this plan.`}
+            {alts?.evidence_status === "empty"
+              ? t`No candidate evidence was recorded for this order.`
+              : t`Alternative evidence is unavailable for this plan.`}
           </Text>
         ) : (
           <Box style={{ overflowX: "auto" }}>
@@ -301,19 +392,33 @@ export function OrderDetailPage() {
                 <tr style={{ borderBottom: "1px solid var(--mb-color-border)", textAlign: "left" }}>
                   <th style={{ padding: "8px 10px" }}>{t`Source`}</th>
                   <th style={{ padding: "8px 10px" }}>{t`Carrier`}</th>
+                  <th style={{ padding: "8px 10px", textAlign: "right" }}>{t`Qty`}</th>
+                  <th style={{ padding: "8px 10px", textAlign: "right" }}>{t`Stock (Avail/Rem)`}</th>
                   <th style={{ padding: "8px 10px", textAlign: "right" }}>{t`Modeled distance`}</th>
                   <th style={{ padding: "8px 10px", textAlign: "right" }}>{t`Estimated transit`}</th>
                   <th style={{ padding: "8px 10px", textAlign: "right" }}>{t`Due-date slack`}</th>
                   <th style={{ padding: "8px 10px", textAlign: "right" }}>{t`Estimated freight`}</th>
                   <th style={{ padding: "8px 10px" }}>{t`Decision`}</th>
                   <th style={{ padding: "8px 10px" }}>{t`Reason`}</th>
+                  <th style={{ padding: "8px 10px" }}>{t`Trade-off`}</th>
                 </tr>
               </thead>
               <tbody>
                 {alts.alternatives.map((alt) => (
                   <tr key={alt.evidence_id} style={{ borderBottom: "1px solid var(--mb-color-border)" }}>
-                    <td style={{ padding: "8px 10px" }}>{alt.source_name}</td>
+                    <td style={{ padding: "8px 10px" }}>
+                      <div>{alt.source_name}</div>
+                      <Text size="xs" c="text-secondary">{alt.source_customer_id}</Text>
+                    </td>
                     <td style={{ padding: "8px 10px" }}>{alt.carrier_name}</td>
+                    <td style={{ padding: "8px 10px", textAlign: "right" }}>
+                      {alt.candidate_quantity != null ? alt.candidate_quantity.toLocaleString() : "—"}
+                    </td>
+                    <td style={{ padding: "8px 10px", textAlign: "right" }}>
+                      {alt.stock_available_kegs != null
+                        ? `${alt.stock_available_kegs} / ${alt.stock_remaining_kegs ?? "—"}`
+                        : "—"}
+                    </td>
                     <td style={{ padding: "8px 10px", textAlign: "right" }}>{`${alt.distance_km} km`}</td>
                     <td style={{ padding: "8px 10px", textAlign: "right" }}>{`${alt.transit_days} d`}</td>
                     <td style={{ padding: "8px 10px", textAlign: "right" }}>{`${alt.slack_days} d`}</td>
@@ -340,11 +445,71 @@ export function OrderDetailPage() {
                         {alt.selected ? t`Selected` : t`Not selected`}
                       </Badge>
                     </td>
-                    <td style={{ padding: "8px 10px" }}>{alt.rejection_reason || (alt.selected ? t`Chosen within modeled bounds` : "—")}</td>
+                    <td style={{ padding: "8px 10px" }}>
+                      {alt.rejection_reason || (alt.selected ? t`Selected in optimization run` : "—")}
+                    </td>
+                    <td style={{ padding: "8px 10px" }}>
+                      {!alt.selected && alt.candidate_route_id > 0 ? (
+                        <Button
+                          size="xs"
+                          variant="default"
+                          onClick={() => handleInspectTradeoff(alt.candidate_route_id)}
+                        >
+                          {t`Inspect`}
+                        </Button>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
+          </Box>
+        )}
+
+        {cfLoading && (
+          <Text size="xs" c="text-secondary" mt="sm">
+            {t`Loading counterfactual trade-off...`}
+          </Text>
+        )}
+        {cfError && (
+          <Text size="xs" c="error" mt="sm">{cfError}</Text>
+        )}
+        {counterfactual && (
+          <Box
+            p="sm"
+            mt="md"
+            style={{
+              border: "1px solid var(--mb-color-border)",
+              backgroundColor: "var(--mb-color-background-secondary)",
+              borderRadius: 6,
+            }}
+          >
+            <Flex justify="space-between" align="center" mb="xs">
+              <Text fw={600} size="sm">
+                {t`Counterfactual Trade-Off: ${counterfactual.target_source_name} via ${counterfactual.carrier_name}`}
+              </Text>
+              <Button variant="subtle" size="xs" onClick={() => setCounterfactual(null)}>
+                {t`Close`}
+              </Button>
+            </Flex>
+            <Text size="sm" mb="xs">{counterfactual.conclusion}</Text>
+            {counterfactual.affected_orders.length > 0 && (
+              <Group gap="xs" wrap="wrap">
+                <Text size="xs" c="text-secondary">{t`Competing orders using this stock:`}</Text>
+                {counterfactual.affected_orders.slice(0, 6).map((ao) => (
+                  <Button
+                    key={ao.order_id}
+                    size="xs"
+                    variant="default"
+                    onClick={() => navigate(`/operations/orders/${ao.order_id}`)}
+                  >
+                    {`${ao.order_id} (${ao.allocated_units} kegs)`}
+                  </Button>
+                ))}
+              </Group>
+            )}
           </Box>
         )}
       </Box>
@@ -353,7 +518,7 @@ export function OrderDetailPage() {
       <Box p="md" style={{ border: "1px solid var(--mb-color-border)", borderRadius: 8 }}>
         <Title order={4} mb="xs">{t`Other orders on the same trip`}</Title>
         <Text size="sm" c="text-secondary">
-          {t`Shared-trip information is not available for this proposed plan.`}
+          {planning_policy?.shared_trip_message || t`No validated shared-trip record is available for this proposal.`}
         </Text>
       </Box>
     </Box>
