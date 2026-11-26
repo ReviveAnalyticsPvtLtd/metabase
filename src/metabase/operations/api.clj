@@ -355,12 +355,27 @@
                WHERE e.run_id = ? AND e.order_id = ?
                ORDER BY e.is_selected DESC, e.freight_cost_inr ASC
                LIMIT 200"
-              [pinned order-id])]
+              [pinned order-id])
+        sel-freight (some #(when (truthy-flag? (:is_selected %))
+                             (some-> (:freight_cost_inr %) double))
+                          rows)
+        format-alt  (fn [r]
+                      (let [sel?    (truthy-flag? (:is_selected r))
+                            freight (some-> (:freight_cost_inr r) double)
+                            reason  (cond
+                                      (not (str/blank? (:rejection_reason r))) (:rejection_reason r)
+                                      sel? "Chosen within modeled bounds"
+                                      (and sel-freight freight (< freight sel-freight))
+                                      "Feasible lane; capacity committed to other orders in the global plan"
+                                      (and sel-freight freight (>= freight sel-freight))
+                                      "Higher modeled freight than selected option"
+                                      :else "Not selected within modeled solver constraints")]
+                        (assoc r
+                               :selected sel?
+                               :rejection_reason reason)))]
     {:order_id            order-id
      :incomplete_evidence (empty? rows)
-     :alternatives        (mapv (fn [r]
-                                  (assoc r :selected (truthy-flag? (:is_selected r))))
-                                rows)
+     :alternatives        (mapv format-alt rows)
      :run                 run
      :disclosures         standard-disclosures}))
 

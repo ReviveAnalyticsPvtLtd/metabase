@@ -286,7 +286,10 @@ export function OrderDetailPage() {
 
       {/* Evaluated Alternatives */}
       <Box p="md" mb="md" style={{ border: "1px solid var(--mb-color-border)", borderRadius: 8 }}>
-        <Title order={4} mb="sm">{t`Evaluated alternatives`}</Title>
+        <Title order={4} mb={4}>{t`Evaluated alternatives`}</Title>
+        <Text size="xs" c="text-secondary" mb="sm">
+          {t`Candidates are evaluated across the full 1,000-order horizon; cheaper feasible lanes may be skipped when their stock or carrier capacity is committed to competing orders.`}
+        </Text>
         {!alts || alts.incomplete_evidence || alts.alternatives.length === 0 ? (
           <Text size="sm" c="text-secondary">
             {t`Alternative evidence is incomplete for this plan.`}
