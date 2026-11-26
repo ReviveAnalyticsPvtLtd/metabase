@@ -47,6 +47,7 @@
    [metabase.native-query-snippets.api]
    [metabase.notification.api]
    [metabase.oauth-server.api.admin]
+   [metabase.operations.api]
    [metabase.osi.ai-context.api]
    [metabase.permissions-rest.api]
    [metabase.premium-features.api]
@@ -231,6 +232,7 @@
    "/notification"         metabase.notification.api/notification-routes
    "/notify"               (+static-apikey metabase.sync.api/notify-routes)
    "/oauth"                (+auth 'metabase.oauth-server.api.admin)
+   "/operations"           (+auth 'metabase.operations.api)
    "/osi"                  {"/ai-context" (+auth 'metabase.osi.ai-context.api)}
    "/permissions"          (+auth 'metabase.permissions-rest.api)
    "/persist"              (+auth 'metabase.model-persistence.api)

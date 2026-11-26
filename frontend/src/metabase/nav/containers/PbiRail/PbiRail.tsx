@@ -277,6 +277,41 @@ export function PbiRail({ isOpen }: { isOpen: boolean }) {
                 {t`Home`}
               </PaddedSidebarLink>
               <PaddedSidebarLink
+                icon="dashboard"
+                url="/dashboard/23"
+                isSelected={isSelectedUrl("/dashboard/23") || isSelectedUrl("/operations/overview")}
+              >
+                {t`Overview`}
+              </PaddedSidebarLink>
+              <PaddedSidebarLink
+                icon="table"
+                url="/operations/orders"
+                isSelected={isSelectedUrl("/operations/orders")}
+              >
+                {t`Orders`}
+              </PaddedSidebarLink>
+              <PaddedSidebarLink
+                icon="warning"
+                url="/operations/exceptions"
+                isSelected={isSelectedUrl("/operations/exceptions")}
+              >
+                {t`Exceptions`}
+              </PaddedSidebarLink>
+              <PaddedSidebarLink
+                icon="folder"
+                url="/operations/inventory"
+                isSelected={isSelectedUrl("/operations/inventory")}
+              >
+                {t`Inventory`}
+              </PaddedSidebarLink>
+              <PaddedSidebarLink
+                icon="bar"
+                url="/collection/root"
+                isSelected={isSelectedUrl("/operations/analytics")}
+              >
+                {t`Analytics`}
+              </PaddedSidebarLink>
+              <PaddedSidebarLink
                 icon="search"
                 url={BROWSE_URL}
                 isSelected={isSelectedUrl(BROWSE_URL)}

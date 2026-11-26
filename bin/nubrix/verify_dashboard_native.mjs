@@ -245,9 +245,9 @@ try {
   if (REQUIRE_CUSTOM_LEGEND) {
     assert(page.hasLegend, "Expected .nubrix-map-legend to be present on map");
   }
-  assert(page.text.includes("Simulated India MVP"), "Expected banner to disclose Simulated India MVP");
+  assert(page.text.includes("Simulated scenario"), "Expected banner to disclose Simulated scenario");
   assert(page.text.includes("1,000"), "Expected banner to disclose 1,000-order horizon");
-  assert(page.text.includes("No Real Bookings"), "Expected banner to disclose No Real Bookings/Reservations");
+  assert(page.text.includes("Proposed plan"), "Expected banner to disclose Proposed plan — not a booking");
   assert(!/real-time/i.test(page.text), "Banner/page must not contain 'real-time' claim");
   assert(postState.url !== page.url, `Expected URL filter params to change after pin click (${postState.url})`);
   assert(postState.tableSnippet && postState.tableSnippet !== page.tableSnippet, "Expected filtered table data to change after pin click");
@@ -288,6 +288,75 @@ try {
   assert(evState.url.includes(`order_id=${clickedOrder.orderId}`), `Expected URL to contain order_id=${clickedOrder.orderId}, got ${evState.url}`);
   assert(evState.evidenceText.includes(clickedOrder.orderId), `Expected Card 147 to display ${clickedOrder.orderId}`);
   assert(evState.evidenceText.includes("Selected") || evState.evidenceText.includes("Rejected"), "Expected Card 147 to show Selected/Rejected candidate decisions");
+
+  // Phase 12.5: Verify Order-First Workspace routes (/operations/orders -> /operations/orders/:orderId -> /operations/exceptions -> /operations/inventory)
+  console.log("Navigating to /operations/orders...");
+  await call("Page.navigate", { url: `${BASE}/operations/orders` });
+  await delay(5000);
+  const ordersEval = await call("Runtime.evaluate", {
+    expression: `({ url: location.href, text: document.body.innerText.slice(0, 1500) })`,
+    returnByValue: true,
+  });
+  const ordersPage = ordersEval.result?.value || {};
+  assert(ordersPage.text.includes("Order Fulfillment Queue"), "Expected OrdersPage heading");
+  assert(ordersPage.text.includes("Simulated scenario"), "Expected SimulationBanner on OrdersPage");
+  assert(!ordersPage.text.includes("RUN-20261124"), "Expected no raw run ID in normal OrdersPage view");
+
+  console.log("Navigating to /operations/orders/ORD-008116...");
+  await call("Page.navigate", { url: `${BASE}/operations/orders/ORD-008116` });
+  let detailPage = { url: "", text: "" };
+  for (let i = 0; i < 10; i++) {
+    await delay(2500);
+    const detailEval = await call("Runtime.evaluate", {
+      expression: `({ url: location.href, text: document.body.innerText.slice(0, 12000) })`,
+      returnByValue: true,
+    });
+    detailPage = detailEval.result?.value || {};
+    if ((detailPage.text || "").includes("Proposed fulfillment journey")) {
+      break;
+    }
+  }
+  assert(detailPage.text.includes("ORD-008116"), "Expected ORD-008116 on OrderDetailPage");
+  assert(detailPage.text.includes("Proposed fulfillment journey"), "Expected fulfillment journey on OrderDetailPage");
+  assert(detailPage.text.includes("Why this plan?"), "Expected Why this plan? on OrderDetailPage");
+  assert(detailPage.text.includes("Evaluated alternatives"), "Expected Evaluated alternatives on OrderDetailPage");
+  assert(detailPage.text.includes("Shared-trip information is not available for this proposed plan."), "Expected shared-trip disclosure on OrderDetailPage");
+  assert(!detailPage.text.includes("RUN-20261124"), "Expected no raw run ID in normal OrderDetailPage view");
+
+  console.log("Navigating to /operations/exceptions...");
+  await call("Page.navigate", { url: `${BASE}/operations/exceptions` });
+  let excPage = { url: "", text: "" };
+  for (let i = 0; i < 8; i++) {
+    await delay(2500);
+    const excEval = await call("Runtime.evaluate", {
+      expression: `({ url: location.href, text: document.body.innerText.slice(0, 4000) })`,
+      returnByValue: true,
+    });
+    excPage = excEval.result?.value || {};
+    if ((excPage.text || "").includes("Exceptions & Shortfall Triage") && (excPage.text || "").includes("ORD-")) {
+      break;
+    }
+  }
+  assert(excPage.text.includes("Exceptions & Shortfall Triage"), "Expected ExceptionsPage heading");
+  assert(excPage.text.includes("Simulated scenario"), "Expected SimulationBanner on ExceptionsPage");
+  assert(excPage.text.includes("ORD-"), "Expected exception order rows on ExceptionsPage");
+
+  console.log("Navigating to /operations/inventory...");
+  await call("Page.navigate", { url: `${BASE}/operations/inventory` });
+  let invPage = { url: "", text: "" };
+  for (let i = 0; i < 8; i++) {
+    await delay(2500);
+    const invEval = await call("Runtime.evaluate", {
+      expression: `({ url: location.href, text: document.body.innerText.slice(0, 4000) })`,
+      returnByValue: true,
+    });
+    invPage = invEval.result?.value || {};
+    if ((invPage.text || "").includes("Simulated Empty-Keg Inventory") && ((invPage.text || "").includes("20L") || (invPage.text || "").includes("30L") || (invPage.text || "").includes("50L"))) {
+      break;
+    }
+  }
+  assert(invPage.text.includes("Simulated Empty-Keg Inventory"), "Expected InventoryPage heading");
+  assert(invPage.text.includes("not reserved"), "Expected unreserved inventory disclosure on InventoryPage");
 
   console.log("=== Native Browser Verification Succeeded! ===");
 } finally {

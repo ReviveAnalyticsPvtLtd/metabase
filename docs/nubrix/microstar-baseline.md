@@ -43,8 +43,19 @@
 - Hardcoded credentials and predictable `/tmp/mb_token.txt` writes were removed from `run_snapshot_pipeline.py`, `configure_control_tower.py`, `inject_metabot_prompts.py`, and `verify_dashboard_native.mjs`.
 - **Action Required by Owners:** Any Railway or Metabase credentials previously exposed in earlier commits or chat transcripts must be rotated/revoked by the infrastructure owners; removing literals from source does not rotate active secrets.
 
-## 5. Current Session Environment Blockers for Live VPS/Railway Actions
+## 5. Order-First Implementation & Verification Status (2026-11-26)
 
-- **VPS SSH:** No SSH private key present in `~/.ssh` (`Permission denied (publickey,password)` for `rauhan@167.86.83.116` and `root@167.86.83.116`).
-- **Metabase / Railway Live Credentials:** `METABASE_USER`/`METABASE_PASS`/`METABASE_SESSION` and `RAILWAY_*` env vars are not set in this shell, so live VPS frontend deployment (`metabase-dev` restart) and live RBAC application require authorized credentials/SSH access.
-- **Health Check Verified:** `https://mstar.nubrixai.com/api/health` returned `{"status":"ok"}`.
+- **Backend Endpoints (`metabase/src/metabase/operations/api.clj`, mounted in `api_routes/routes.clj`):**
+  - Authenticated (`+auth`), read-only, parameterized endpoints against Database `2` (`railway`): `/api/operations/run`, `/api/operations/overview`, `/api/operations/orders` (keyset cursor pagination on `(needed_by, order_id, allocation_id)` using `metabase.request.core/limit`), `/api/operations/orders/:order-id` (reconciliation check, coordinates, timeline, deterministic explanation), `/api/operations/orders/:order-id/alternatives`, `/api/operations/exceptions`, and `/api/operations/inventory`.
+- **Frontend Workspace (`metabase/frontend/src/metabase/operations/` & `PbiRail.tsx`):**
+  - Routes `/operations/overview` (redirects to `/dashboard/23`), `/operations/orders`, `/operations/orders/:orderId`, `/operations/exceptions`, `/operations/inventory`, and `/operations/analytics` (redirects to `/collection/root`), plus `Overview`, `Orders`, `Exceptions`, `Inventory`, and `Analytics` left-rail navigation (`Routes` intentionally omitted since no real trip legs exist).
+  - Dashboard 23 banner updated to `Simulated scenario · Proposed plan — not a booking` with direct links to `/operations/orders` and `/operations/exceptions`.
+- **Verification Ledger:**
+  - **Verified locally:** Jest (`operations.unit.spec.tsx`, `PbiRail.unit.spec.tsx`, `PinMap.unit.spec.tsx`), Python `unittest` (`metabase/bin/nubrix/test_*.py`), and local `rspack` release bundle (`bun run build-release:js`).
+  - **Verified against Railway:** Active run `RUN-20261124-211506-7F7FBE` (`1,000` horizon orders out of `9,899` open orders, `219,420` ordered, `93,600` fulfilled, `125,820` pending, `62,030` proposed allocated, `63,790` uncovered, `280` attention orders, `₹4,565,913` modeled freight).
+  - **Verified on VPS / in Metabase:** `https://mstar.nubrixai.com/api/health` (`200 ok`), all 7 `/api/operations/*` endpoints (unauthenticated `401`, keyset pagination, `reconciled: true`, `404` on missing order), and Dashboard 23 + `/operations/*` live browser E2E (`verify_dashboard_native.mjs`).
+  - **Unverified:** Non-admin viewer RBAC isolation (`--setup-rbac --apply` intentionally withheld pending explicit owner approval; non-admin user end-to-end verification remains unverified).
+
+## 6. Security & Credential Rotation Note
+
+- Active VPS/Railway/Metabase credentials used during authorized deployment are not stored in this repository. Owners should rotate any credentials previously shared in session transcripts before external demos.

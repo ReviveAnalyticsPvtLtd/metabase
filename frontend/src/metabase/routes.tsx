@@ -167,6 +167,13 @@ const workspacesPage = () =>
     /* webpackChunkName: "workspaces" */ "metabase/collections/components/WorkspacesPage"
   ).then(({ WorkspacesPage }) => ({ Component: WorkspacesPage }));
 
+const operationsPage =
+  (name: "OrdersPage" | "OrderDetailPage" | "ExceptionsPage" | "InventoryPage") =>
+  () =>
+    import(/* webpackChunkName: "operations" */ "metabase/operations").then(
+      (module) => ({ Component: module[name] }),
+    );
+
 const collectionLanding = () =>
   import(
     /* webpackChunkName: "collection" */ "metabase/collections/components/CollectionLanding"
@@ -313,6 +320,30 @@ export const getRoutes = (store: AppStore): RouteObject[] => [
                 ],
               },
 
+              {
+                path: "operations/overview",
+                element: <Navigate to="/dashboard/23" replace />,
+              },
+              {
+                path: "operations/orders",
+                lazy: operationsPage("OrdersPage"),
+              },
+              {
+                path: "operations/orders/:orderId",
+                lazy: operationsPage("OrderDetailPage"),
+              },
+              {
+                path: "operations/exceptions",
+                lazy: operationsPage("ExceptionsPage"),
+              },
+              {
+                path: "operations/inventory",
+                lazy: operationsPage("InventoryPage"),
+              },
+              {
+                path: "operations/analytics",
+                element: <Navigate to="/collection/root" replace />,
+              },
               {
                 path: "collection/entity/:entity_id/*",
                 element: createEntityIdRedirect({
