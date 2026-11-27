@@ -135,6 +135,12 @@ def main() -> int:
         help="Default carrier truck capacity in kegs when a carrier record does not specify one.",
     )
     parser.add_argument(
+        "--max-stops-per-trip",
+        type=int,
+        default=4,
+        help="Maximum deliveries on one trip. Nearby short trips remain separate when their declared freight is lower.",
+    )
+    parser.add_argument(
         "--no-consolidate-trips",
         action="store_true",
         help="Disable multi-order shared-trip consolidation (default: enabled)",
@@ -164,6 +170,7 @@ def main() -> int:
     snapshot["as_of_date"] = str(as_of_d)
     snapshot["directed_lanes"] = True
     snapshot["consolidate_trips"] = not args.no_consolidate_trips
+    snapshot["max_stops_per_trip"] = max(1, args.max_stops_per_trip)
     if args.carrier_truck_cap and args.carrier_truck_cap > 0:
         snapshot["carrier_truck_limits"] = {
             c["name"]: int(args.carrier_truck_cap)

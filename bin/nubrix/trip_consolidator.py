@@ -170,7 +170,8 @@ def consolidate_trips_cpsat(
     """Consolidate covered orders at each source into multi-order trips via CP-SAT set partitioning.
 
     Preserves exact source assignments, SKU stock conservation, deadlines, and carrier caps
-    while minimizing total physical keg-km freight and carrier dispatch count.
+    while minimizing declared carrier freight. A fixed-trip charge is included only
+    when the carrier explicitly provides one in the snapshot.
     Returns (selected_trips, order_trip_updates_map).
     """
     customers = snapshot.get("customers", {})
@@ -262,8 +263,9 @@ def consolidate_trips_cpsat(
             "stop_count": len(seq_eval["stops"]),
             "total_distance_km": seq_eval["total_distance_km"],
             "total_keg_km": seq_eval["total_keg_km"],
-            "total_freight_paise": seq_eval["total_freight_paise"],
-            "total_freight_inr": seq_eval["total_freight_inr"],
+            "fixed_trip_charge_inr": float(car.get("fixed_trip_charge_inr", 0.0) or 0.0),
+            "total_freight_paise": seq_eval["total_freight_paise"] + int(round(float(car.get("fixed_trip_charge_inr", 0.0) or 0.0) * PAISE_PER_INR)),
+            "total_freight_inr": round(seq_eval["total_freight_inr"] + float(car.get("fixed_trip_charge_inr", 0.0) or 0.0), 2),
             "dispatch_date": str(dispatch_d),
             "line_ids": line_ids,
             "order_ids": order_ids,
@@ -386,10 +388,10 @@ def consolidate_trips_cpsat(
             if car_name in by_car and max_trucks is not None:
                 model.Add(sum(by_car[car_name]) <= int(max_trucks))
 
-    # Minimize total physical freight (paise) + ₹500 implicit truck-saving incentive per trip dispatch
-    # (so consolidations that use 1 fewer truck win cleanly without inventing money in displayed freight!)
+    # Minimize the declared carrier freight basis. Do not invent a dispatch
+    # penalty because several short trips can be cheaper than one long trip.
     total_obj = sum(
-        (t["total_freight_paise"] + 50_000) * y_vars[t["cand_trip_id"]]
+        t["total_freight_paise"] * y_vars[t["cand_trip_id"]]
         for t in candidate_trips
     )
     model.Minimize(total_obj)
