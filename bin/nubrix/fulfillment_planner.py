@@ -370,11 +370,12 @@ class OrToolsFulfillmentPlanner:
                 candidates_truncated = True
             omitted_by_order[oid] = omitted_count
 
-            # Available carriers
-            carrier_items = list(carriers.values()) if carriers else [
+            # Available carriers (Pareto-prune strictly dominated carriers when vehicles are not modeled)
+            raw_carriers = list(carriers.values()) if carriers else [
                 {"id": "CAR-01", "name": "SwiftHaul Logistics", "rate_inr": 2.10, "rate_paise": 210, "max_load": 900},
                 {"id": "CAR-02", "name": "Deccan Freight", "rate_inr": 1.85, "rate_paise": 185, "max_load": 700},
             ]
+            forced_for_order = (snapshot.get("forced_assignment") or {}).get(oid)
 
             for src_id, avail_qty, km, r_legs in selected_sources_for_order:
                 src_cust = customers.get(src_id, {})
@@ -383,6 +384,24 @@ class OrToolsFulfillmentPlanner:
                 is_feasible, slack = evaluate_deadline_feasibility(ordered_d, needed_by_d, transit_days, as_of_date=as_of_d)
                 trip_start_min = (dispatch_start - base_date).days * 1440
                 trip_end_min = trip_start_min + max(1, transit_days) * 1440
+
+                if not vehicles:
+                    sorted_cars = sorted(
+                        raw_carriers,
+                        key=lambda c: (float(c.get("rate_inr", 2.0)), -int(c.get("max_load", 0) or 0)),
+                    )
+                    carrier_items = []
+                    best_qty_so_far = 0
+                    for c in sorted_cars:
+                        c_cap = int(c.get("max_load", 0) or 0)
+                        c_qty = min(pending_qty, avail_qty, c_cap) if c_cap > 0 else 0
+                        is_forced_car = forced_for_order and forced_for_order.get("carrier") == c.get("name")
+                        if c_cap <= 0 or c_qty > best_qty_so_far or is_forced_car:
+                            carrier_items.append(c)
+                            if c_qty > best_qty_so_far:
+                                best_qty_so_far = c_qty
+                else:
+                    carrier_items = raw_carriers
 
                 for car in carrier_items:
                     car_id = str(car.get("id", "CAR-01"))
@@ -639,7 +658,8 @@ class OrToolsFulfillmentPlanner:
                     all_stages_optimal = False
 
             # Stage 5: Minimize modeled freight
-            status5 = _solve_stage(freight_expr, False, stage_budget * 1.2, prev_solution)
+            stage5_budget = max(4.0, float(self.time_limit_seconds) * 0.40)
+            status5 = _solve_stage(freight_expr, False, stage5_budget, prev_solution)
             if status5 in (cp_model.OPTIMAL, cp_model.FEASIBLE):
                 status = status5
                 if status5 != cp_model.OPTIMAL:
@@ -750,7 +770,7 @@ class OrToolsFulfillmentPlanner:
                         ev["freight_cost_inr"] = chosen_freight
                         ev["cost_formula"] = f"{chosen_qty} kegs * {ev['distance_km']} km * INR {chosen_cand.cost_per_keg_km:.2f}/keg-km (Stage 2 residual)"
                     ev["reason_code"] = "SELECTED_RESIDUAL" if order_stage == "STAGE_2_RESIDUAL" else "SELECTED_PRIMARY"
-                    ev["reason"] = f"Selected in {order_stage} ({chosen_qty} kegs from {src_cid} via {ev.get('carrier_name')})."
+                    ev["reason"] = f"Selected ({chosen_qty} kegs from {ev.get('source_name') or src_cid} via {ev.get('carrier_name')})."
                 elif ev.get("is_feasible") is False:
                     ev["reason_code"] = ev.get("reason_code") or "DEADLINE_EXCEEDED"
                 elif rem_qty < cand_qty and competing:
@@ -774,8 +794,8 @@ class OrToolsFulfillmentPlanner:
                 elif chosen_cand:
                     ev["reason_code"] = "GLOBAL_OBJECTIVE_TRADEOFF"
                     ev["reason"] = (
-                        f"Not selected under {objective_policy} "
-                        f"({len(competing)} competing orders on {src_cid}, {rem_qty} {sku} kegs remaining)."
+                        f"Not selected under service-first priority and freight cost trade-off "
+                        f"({len(competing)} competing orders on {ev.get('source_name') or src_cid}, {rem_qty} {sku} kegs remaining)."
                     )
                 else:
                     ev["reason_code"] = "SOLVER_UNALLOCATED"

@@ -642,8 +642,7 @@
        :scenario_uncovered       (:scenario_uncovered solved)
        :uncovered_delta          (:uncovered_delta solved)
        :affected_orders          (:affected_orders solved)
-       :conclusion               (format "Validated OR-Tools re-solve (%s): forcing %d kegs from %s via %s changes total covered kegs by %+d, uncovered orders by %+d, and modeled freight by ₹%+,.2f across %d affected order(s)."
-                                         (:solver_status solved)
+       :conclusion               (format "What-if re-evaluation: forcing %d kegs from %s via %s changes total covered kegs by %+d, uncovered orders by %+d, and modeled freight by ₹%+,.2f across %d affected order(s)."
                                          (long (or (:forced_qty solved) 0))
                                          (:target_source_name solved)
                                          (:target_carrier solved)
@@ -880,9 +879,8 @@
       (throw (ex-info (or (:error solved) "Scenario re-solve failed") {:status-code 400})))
     (assoc solved
            :is_simulation true
-           :summary (format "%s (%s): proposed kegs %+,d (%d -> %d), uncovered orders %+d, modeled freight ₹%+,.0f."
+           :summary (format "%s: proposed kegs %+,d (%d -> %d), uncovered orders %+d, modeled freight ₹%+,.0f."
                             (:title solved)
-                            (:solver_status solved)
                             (long (or (:kegs_delta solved) 0))
                             (long (or (:baseline_kegs solved) 0))
                             (long (or (:scenario_kegs solved) 0))

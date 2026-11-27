@@ -280,7 +280,7 @@ export function OrderDetailPage() {
         >
           <Text size="xs" fw={600} mb={4}>{t`Technical Provenance & Diagnostics`}</Text>
           <Text size="xs" c="text-secondary">
-            {`Run: ${run.run_id} · Mode: ${planning_policy?.mode || "MODE_A_ORDER_LEVEL"} · Policy: ${planning_policy?.source_policy || "depot_first"} · Objective: ${planning_policy?.objective_policy || "—"} · Stage: ${planning_policy?.decision_stage || "—"} · Solver: ${run.diagnostic?.solver_status || "—"}`}
+            {t`Plan reference: ${run.run_id} · Scope: Order-level single source · Policy: ${planning_policy?.source_policy_label || t`Service-First Fallback`}`}
           </Text>
         </Box>
       )}
@@ -584,11 +584,6 @@ export function OrderDetailPage() {
             </Flex>
             <Text size="sm" mb="xs">{counterfactual.conclusion}</Text>
             <Group gap="lg" mb="xs" wrap="wrap">
-              {counterfactual.solver_status && (
-                <Text size="xs" c="text-secondary">
-                  {t`Solver: ${counterfactual.solver_status}`}
-                </Text>
-              )}
               {counterfactual.kegs_delta != null && (
                 <Text size="xs" c="text-secondary">
                   {t`Plan Kegs Delta: ${counterfactual.kegs_delta >= 0 ? "+" : ""}${counterfactual.kegs_delta.toLocaleString()}`}
