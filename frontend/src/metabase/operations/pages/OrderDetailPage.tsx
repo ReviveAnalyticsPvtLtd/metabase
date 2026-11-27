@@ -45,7 +45,8 @@ export function OrderDetailPage() {
   const [overrideLoading, setOverrideLoading] = useState(false);
   const [inspectedCandId, setInspectedCandId] = useState<number | null>(null);
   const [hoveredAlt, setHoveredAlt] = useState<OrderAlternative | null>(null);
-  const [showAltPins, setShowAltPins] = useState(true);
+  const [showAltPins, setShowAltPins] = useState(false);
+  const [showAllOptionsTable, setShowAllOptionsTable] = useState(false);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [cfLoading, setCfLoading] = useState(false);
   const [cfError, setCfError] = useState<string | null>(null);
@@ -336,23 +337,30 @@ export function OrderDetailPage() {
         <Box style={{ flex: "1.4 1 520px" }}>
           <Flex justify="space-between" align="center" mb="xs">
             <Text size="xs" c="text-secondary">
-              {t`Click or hover an alternative below (or click amber pins on the map) to compare routes.`}
+              {showAltPins
+                ? t`Showing selected route plus evaluated alternative sources.`
+                : t`Showing selected source and destination Brewer.`}
             </Text>
             <Button size="xs" variant="subtle" onClick={() => setShowAltPins((v) => !v)}>
-              {showAltPins ? t`Hide Alternative Pins` : t`Show Alternative Pins`}
+              {showAltPins ? t`Show selected route only` : t`Compare options on map`}
             </Button>
           </Flex>
           <FulfillmentMap
             markers={mapMarkers}
             lines={mapLines}
             height={360}
-            title={t`Proposed Route & Evaluated Source Locations`}
+            fitKey={orderId}
+            title={t`Proposed Fulfillment Route`}
             subtitle={t`Schematic connection — not a road route (${order.distance_km} km modeled; road routing provider pending approval)`}
             legendItems={[
               { label: t`Selected Source`, color: "#2563EB" },
               { label: t`Destination Brewer`, color: "#7C3AED" },
-              { label: t`Alternative (Stock Committed)`, color: "#D97706" },
-              { label: t`Ineligible / Deadline`, color: "#DC2626" },
+              ...(showAltPins
+                ? [
+                    { label: t`Alternative (Stock Committed)`, color: "#D97706" },
+                    { label: t`Ineligible / Deadline`, color: "#DC2626" },
+                  ]
+                : []),
             ]}
           />
         </Box>
@@ -382,13 +390,15 @@ export function OrderDetailPage() {
             <Flex key={item.label} justify="space-between" py={5} style={{ borderBottom: "1px solid var(--mb-color-border)" }}>
               <Text size="sm" fw={500}>{item.label}</Text>
               <Group gap="xs">
-                <Text size="sm">
+                <Text size="sm" c={(item as any).overdue_vs_as_of ? "red" : undefined}>
                   {item.date
                     ? String(item.date).slice(0, 10)
                     : item.days !== undefined
                     ? `${item.days} day(s)`
                     : item.feasible !== undefined
-                    ? item.feasible
+                    ? (item as any).overdue_vs_as_of
+                      ? t`Overdue vs. planning as-of`
+                      : item.feasible
                       ? t`Within window`
                       : t`Outside window`
                     : "—"}
@@ -438,14 +448,77 @@ export function OrderDetailPage() {
       {/* Embedded Order-Scoped AI Copilot */}
       <OpsCopilotPanel orderId={order.order_id} compact />
 
-      {/* Evaluated Alternatives + Inline/Top Trade-Off Inspector */}
+      {/* Evaluated Options: Recommended + Top 2 Decision Cards, with expandable full table */}
       <Box p="md" mb="md" style={{ border: "1px solid var(--mb-color-border)", borderRadius: 8 }} ref={tradeoffRef}>
-        <Title order={4} mb={4}>{t`Evaluated alternatives`}</Title>
+        <Flex justify="space-between" align="center" mb={4} wrap="wrap" gap="xs">
+          <Title order={4}>{t`Compare fulfillment options`}</Title>
+          {alts && alts.alternatives.length > 0 && (
+            <Button size="xs" variant="subtle" onClick={() => setShowAllOptionsTable((v) => !v)}>
+              {showAllOptionsTable
+                ? t`Hide full comparison table`
+                : t`All evaluated options (${alts.alternatives.length})`}
+            </Button>
+          )}
+        </Flex>
         <Text size="xs" c="text-secondary" mb="sm">
           {alts && alts.truncated
-            ? t`Showing ${alts.returned_count ?? alts.alternatives.length} of ${alts.evaluated_count ?? alts.alternatives.length} evaluated candidates${alts.omitted_count ? ` (${alts.omitted_count} farther sources omitted by source cap)` : ""}. Bounded search — not guaranteed global optimum.`
-            : t`Showing all ${alts?.alternatives.length ?? 0} evaluated candidates for this order.`}
+            ? t`Showing ${alts.returned_count ?? alts.alternatives.length} of ${alts.evaluated_count ?? alts.alternatives.length} evaluated options${alts.omitted_count ? ` (${alts.omitted_count} farther sources omitted)` : ""}.`
+            : t`Showing ${alts?.alternatives.length ?? 0} evaluated options for this order.`}
         </Text>
+
+        {alts && alts.alternatives.length > 0 && (
+          <Flex gap="sm" mb="md" wrap="wrap">
+            {alts.alternatives.slice(0, 3).map((alt) => {
+              const isInspected = inspectedCandId === alt.candidate_route_id && alt.candidate_route_id > 0;
+              return (
+                <Box
+                  key={alt.evidence_id}
+                  p="sm"
+                  style={{
+                    flex: "1 1 260px",
+                    border: alt.selected
+                      ? "2px solid #16A34A"
+                      : isInspected
+                      ? "2px solid #1967D2"
+                      : "1px solid var(--mb-color-border)",
+                    borderRadius: 8,
+                    backgroundColor: "var(--mb-color-background-secondary)",
+                  }}
+                >
+                  <Flex justify="space-between" align="center" mb={4} gap="xs">
+                    <Text fw={700} size="sm">{alt.source_name}</Text>
+                    <Badge
+                      size="xs"
+                      style={
+                        alt.selected
+                          ? { backgroundColor: "#E6F4EA", color: "#137333", textTransform: "none" }
+                          : { backgroundColor: "#F1F3F4", color: "#3C4043", textTransform: "none" }
+                      }
+                    >
+                      {alt.selected ? t`Recommended` : alt.source_role || t`Alternative`}
+                    </Badge>
+                  </Flex>
+                  <Text size="xs" c="text-secondary" mb={4}>
+                    {`${alt.carrier_name} · ${alt.candidate_quantity ?? order.pending_units} kegs · ${alt.distance_km} km · ₹${Number(alt.freight_cost_inr).toLocaleString()}`}
+                  </Text>
+                  <Text size="xs" mb="xs">
+                    {alt.rejection_reason || (alt.selected ? t`Selected in active plan` : "—")}
+                  </Text>
+                  {!alt.selected && alt.candidate_route_id > 0 && (
+                    <Button
+                      size="xs"
+                      variant={isInspected ? "filled" : "default"}
+                      loading={cfLoading && isInspected}
+                      onClick={() => handleInspectTradeoff(alt.candidate_route_id)}
+                    >
+                      {isInspected ? t`Impact shown below` : t`Check network impact`}
+                    </Button>
+                  )}
+                </Box>
+              );
+            })}
+          </Flex>
+        )}
 
         {cfLoading && (
           <Box
@@ -562,10 +635,10 @@ export function OrderDetailPage() {
         {!alts || alts.alternatives.length === 0 ? (
           <Text size="sm" c="text-secondary">
             {alts?.evidence_status === "empty"
-              ? t`No candidate evidence was recorded for this order.`
+              ? t`No alternative evidence was recorded for this order.`
               : t`Alternative evidence is unavailable for this plan.`}
           </Text>
-        ) : (
+        ) : showAllOptionsTable ? (
           <Box style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
@@ -664,7 +737,7 @@ export function OrderDetailPage() {
               </tbody>
             </table>
           </Box>
-        )}
+        ) : null}
       </Box>
 
       {/* Other orders on the same trip */}

@@ -322,7 +322,7 @@ export function PbiRail({ isOpen }: { isOpen: boolean }) {
               <PaddedSidebarLink
                 icon="bar"
                 url="/collection/root"
-                isSelected={isSelectedUrl("/operations/analytics")}
+                isSelected={isSelectedUrl("/collection/root") || isSelectedUrl("/operations/analytics")}
               >
                 {t`Analytics`}
               </PaddedSidebarLink>

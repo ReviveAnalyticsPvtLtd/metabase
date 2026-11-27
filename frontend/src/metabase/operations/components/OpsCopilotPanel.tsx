@@ -30,14 +30,15 @@ export function OpsCopilotPanel({
 
   const quickPrompts = orderId
     ? [
-        t`Why was this source selected and why weren't cheaper or peer options used?`,
-        t`What happens if we force the top alternative for ${orderId}?`,
-        t`Summarize this order's deadline and shortfall risk for my manager.`,
+        t`Why was this source selected instead of other options?`,
+        t`Why use a Brewer instead of a depot, or why is it uncovered?`,
+        t`What changes if I choose the next alternative?`,
+        t`Which data is missing for this plan?`,
       ]
     : [
-        t`Summarize the Depot-First plan coverage and top bottlenecks.`,
+        t`Summarize the active plan coverage and top bottlenecks.`,
         t`Why are some orders uncovered in the current horizon?`,
-        t`How does Depot-First compare to the unrestricted nearest-source benchmark?`,
+        t`How does Service-First Fallback compare to strict depot-only?`,
       ];
 
   const handleAsk = async (qText: string) => {
@@ -77,24 +78,11 @@ export function OpsCopilotPanel({
       <Flex justify="space-between" align="center" mb="xs" wrap="wrap" gap="xs">
         <Group gap="xs">
           <Icon name="insight" size={16} color="var(--mb-color-brand)" />
-          <Title order={5}>{t`Nubrix Ops AI Copilot`}</Title>
-          <Badge
-            size="xs"
-            style={{
-              backgroundColor: "#E8F0FE",
-              color: "#1967D2",
-              border: "1px solid #D2E3FC",
-              textTransform: "none",
-            }}
-          >
-            {t`Deterministic local summary · No external AI`}
-          </Badge>
-        </Group>
-        {reply && (
+          <Title order={5}>{t`Plan explanation`}</Title>
           <Text size="xs" c="text-secondary">
-            {t`Local deterministic summary (external AI disabled)`}
+            {t`Deterministic, solver-backed Operations decision support. No external AI is used.`}
           </Text>
-        )}
+        </Group>
       </Flex>
 
       <Group gap="xs" mb="sm" wrap="wrap">
@@ -129,7 +117,7 @@ export function OpsCopilotPanel({
             style={{ flex: 1 }}
           />
           <Button type="submit" loading={loading} size="sm">
-            {t`Ask AI`}
+            {t`Ask`}
           </Button>
         </Flex>
       </form>
@@ -153,6 +141,25 @@ export function OpsCopilotPanel({
           <Text size="sm" style={{ lineHeight: 1.5 }}>
             {reply.answer}
           </Text>
+          {reply.cited_ids && reply.cited_ids.length > 0 && (
+            <Group gap="xs" mt="xs" wrap="wrap">
+              <Text size="xs" c="text-secondary">{t`Evidence IDs:`}</Text>
+              {reply.cited_ids.map((cid) => (
+                <Badge
+                  key={cid}
+                  size="xs"
+                  style={{
+                    backgroundColor: "#F1F3F4",
+                    color: "#3C4043",
+                    border: "1px solid #DADCE0",
+                    textTransform: "none",
+                  }}
+                >
+                  {cid}
+                </Badge>
+              ))}
+            </Group>
+          )}
         </Box>
       )}
     </Box>

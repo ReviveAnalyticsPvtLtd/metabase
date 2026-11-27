@@ -1,6 +1,7 @@
+import { useState } from "react";
 import { t } from "ttag";
 
-import { Badge, Box, Flex, Group, Text } from "metabase/ui";
+import { Box, Button, Flex, Group, Text } from "metabase/ui";
 
 import type { OperationsDisclosures, OperationsRunSummary } from "../types";
 
@@ -11,58 +12,50 @@ export function SimulationBanner({
   run?: OperationsRunSummary | null;
   disclosures?: OperationsDisclosures | null;
 }) {
+  const [showAbout, setShowAbout] = useState(false);
+
+  const asOfStr = run?.as_of_date ? String(run.as_of_date).slice(0, 10) : null;
+  const pubStr = run?.created_at ? String(run.created_at).slice(0, 10) : null;
+
   return (
     <Box
-      p="sm"
-      mb="md"
+      px="sm"
+      py={6}
+      mb="sm"
       style={{
-        borderRadius: 8,
+        borderRadius: 6,
         border: "1px solid var(--mb-color-border)",
         backgroundColor: "var(--mb-color-background-secondary)",
       }}
       data-testid="simulation-banner"
     >
-      <Flex justify="space-between" align="center" wrap="wrap" gap="sm">
-        <Group gap="xs" wrap="wrap">
-          <Badge
-            size="sm"
-            style={{
-              backgroundColor: "#E8F0FE",
-              color: "#1967D2",
-              border: "1px solid #D2E3FC",
-              textTransform: "none",
-            }}
-          >
-            {run?.source_policy_label || t`Depot-First — approved facilities and distributors`}
-          </Badge>
-          <Badge
-            size="sm"
-            style={{
-              backgroundColor: "#FEF7E0",
-              color: "#B06000",
-              border: "1px solid #FEEFC3",
-              textTransform: "none",
-            }}
-          >
-            {t`Simulated · Proposed plan — not a booking`}
-          </Badge>
-          {run?.as_of_date && (
-            <Text size="xs" c="text-secondary">
-              {t`Plan as of ${String(run.as_of_date).slice(0, 10)}`}
-            </Text>
-          )}
-          {run && (
-            <Text size="xs" c="text-secondary">
-              {t`Showing the current planning horizon: ${run.horizon_orders.toLocaleString()} orders of ${run.total_open_orders.toLocaleString()} open orders.`}
-            </Text>
-          )}
-        </Group>
-        {disclosures?.summary && (
-          <Text size="xs" c="text-secondary">
-            {disclosures.summary}
+      <Flex justify="space-between" align="center" wrap="wrap" gap="xs">
+        <Group gap="sm" wrap="wrap">
+          <Text size="xs" fw={600}>
+            {run?.source_policy_label || t`Service-First Fallback — Facility > Distributor > Brewer`}
           </Text>
-        )}
+          <Text size="xs" c="text-secondary">
+            {t`Proposed simulation (not booked or reserved)`}
+            {asOfStr ? t` · Simulated as of ${asOfStr}` : ""}
+            {pubStr ? t` · Published ${pubStr}` : ""}
+            {run ? t` · ${run.horizon_orders.toLocaleString()} of ${run.total_open_orders.toLocaleString()} open orders` : ""}
+          </Text>
+        </Group>
+        <Button size="xs" variant="subtle" onClick={() => setShowAbout((v) => !v)}>
+          {showAbout ? t`Hide plan details` : t`About this plan`}
+        </Button>
       </Flex>
+      {showAbout && (
+        <Box mt="xs" pt="xs" style={{ borderTop: "1px solid var(--mb-color-border)" }}>
+          <Text size="xs" c="text-secondary">
+            {disclosures?.summary ||
+              t`Simulated India demonstration. Proposed plan only — inventory is not reserved and carriers are not booked.`}
+          </Text>
+          <Text size="xs" c="text-secondary" mt={4}>
+            {t`Missing source tables: Truck fleet / trip schedules and InventoryReservation. Distances use modeled synthetic road proxies.`}
+          </Text>
+        </Box>
+      )}
     </Box>
   );
 }

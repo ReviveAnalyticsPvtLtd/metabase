@@ -14,13 +14,15 @@
    [toucan2.core :as t2])
   (:import
    (java.nio.charset StandardCharsets)
-   (java.util Base64)))
+   (java.util Base64)
+   (java.util.concurrent Semaphore)))
 
 (set! *warn-on-reflection* true)
 
 (def ^:private railway-db-id 2)
 
 (defonce ^:private ops-cache (atom {}))
+(defonce ^:private ^Semaphore solver-semaphore (Semaphore. 2 true))
 
 (defn- cached-fetch
   "Lightweight TTL cache for read-only Railway metadata and KPIs."
@@ -36,10 +38,11 @@
 (defn- source-policy-label
   [policy]
   (case (str policy)
-    "depot_first"          "Depot-First — approved facilities and distributors"
-    "unrestricted_nearest" "Unrestricted nearest-source — benchmark only"
-    "approved_peer_brewer" "Approved peer-Brewer transfer — exception scenario"
-    "Depot-First — approved facilities and distributors"))
+    "service_first_fallback" "Service-First Fallback — Facility > Distributor > Brewer"
+    "depot_first"            "Depot-First — approved facilities and distributors"
+    "unrestricted_nearest"   "Unrestricted nearest-source — benchmark only"
+    "approved_peer_brewer"   "Approved peer-Brewer transfer — exception scenario"
+    "Service-First Fallback — Facility > Distributor > Brewer"))
 
 (defn- check-operations-access!
   "Verify authenticated user has read access to the MicroStar Railway database before any query."
@@ -51,33 +54,38 @@
     db))
 
 (defn- run-what-if-solver
-  "Execute the isolated Python OR-Tools solver over a copied snapshot without mutating Railway."
+  "Execute the isolated Python OR-Tools solver over a copied immutable snapshot with bounded concurrency."
   [db cli-args]
-  (let [details    (:details db)
-        python-bin (or (first (filter #(.exists (io/file %))
-                                      ["/home/rauhan/nubrix-venv/bin/python"
-                                       ".venv/bin/python"
-                                       "../.venv/bin/python"]))
-                       "python3")
-        script     (or (first (filter #(.exists (io/file %))
-                                      ["bin/nubrix/solve_what_if.py"
-                                       "/home/rauhan/metabase/bin/nubrix/solve_what_if.py"]))
-                       "bin/nubrix/solve_what_if.py")
-        env-map    (merge (into {} (System/getenv))
-                          {"RAILWAY_HOST"     (str (or (:host details) "switchyard.proxy.rlwy.net"))
-                           "RAILWAY_PORT"     (str (or (:port details) 32007))
-                           "RAILWAY_USER"     (str (or (:user details) "root"))
-                           "RAILWAY_PASSWORD" (str (or (:password details) ""))
-                           "RAILWAY_DATABASE" (str (or (:dbname details) (:db details) "railway"))})
-        res        (apply shell/sh python-bin script (concat cli-args [:env env-map]))]
-    (when-not (zero? (:exit res))
-      (log/warnf "What-if solver failed (exit=%d): %s" (:exit res) (:err res))
-      (throw (ex-info "Solver re-optimization failed" {:status-code 500})))
-    (try
-      (json/parse-string (str/trim (:out res)) true)
-      (catch Exception e
-        (log/warnf "Invalid solver JSON output: %s" (.getMessage e))
-        (throw (ex-info "Invalid solver response" {:status-code 500}))))))
+  (when-not (.tryAcquire solver-semaphore 5 java.util.concurrent.TimeUnit/SECONDS)
+    (throw (ex-info "Solver queue busy; please retry in a moment." {:status-code 429})))
+  (try
+    (let [details    (:details db)
+          python-bin (or (first (filter #(.exists (io/file %))
+                                        ["/home/rauhan/nubrix-venv/bin/python"
+                                         ".venv/bin/python"
+                                         "../.venv/bin/python"]))
+                         "python3")
+          script     (or (first (filter #(.exists (io/file %))
+                                        ["bin/nubrix/solve_what_if.py"
+                                         "/home/rauhan/metabase/bin/nubrix/solve_what_if.py"]))
+                         "bin/nubrix/solve_what_if.py")
+          env-map    (merge (into {} (System/getenv))
+                            {"RAILWAY_HOST"     (str (or (:host details) "switchyard.proxy.rlwy.net"))
+                             "RAILWAY_PORT"     (str (or (:port details) 32007))
+                             "RAILWAY_USER"     (str (or (:user details) "root"))
+                             "RAILWAY_PASSWORD" (str (or (:password details) ""))
+                             "RAILWAY_DATABASE" (str (or (:dbname details) (:db details) "railway"))})
+          res        (apply shell/sh python-bin script (concat cli-args [:env env-map]))]
+      (when-not (zero? (:exit res))
+        (log/warnf "What-if solver failed (exit=%d): %s" (:exit res) (:err res))
+        (throw (ex-info "Solver re-optimization failed" {:status-code 500})))
+      (try
+        (json/parse-string (str/trim (:out res)) true)
+        (catch Exception e
+          (log/warnf "Invalid solver JSON output: %s" (.getMessage e))
+          (throw (ex-info "Invalid solver response" {:status-code 500})))))
+    (finally
+      (.release solver-semaphore))))
 
 (defn- run-native-query
   "Execute a parameterized read-only native query against Database 2 and return vector of keyword-keyed maps."
@@ -457,6 +465,10 @@
                           (and sel-ev (:candidate_quantity sel-ev)
                                (not= proposed (long (:candidate_quantity sel-ev))))
                           (conj "Quantity mismatch between allocation and selected candidate evidence.")))
+          overdue-as-of? (let [nb (some-> (:needed_by row) str (subs 0 10))
+                               aod (some-> (:as_of_date run) str (subs 0 10))]
+                           (and nb aod (neg? (compare nb aod))))
+          deadline-feasible? (and (= "Y" (:on_time_feasible row)) (not overdue-as-of?))
           modeled-legs (if (pos? proposed)
                          [{:leg_index 1
                            :from_id   (:source_customer_id row)
@@ -472,6 +484,7 @@
       {:order       (assoc row
                            :status (normalize-status row)
                            :reconciled reconciled?
+                           :overdue_vs_as_of overdue-as-of?
                            :distributor_mode (or (:distributor_mode row) "coordinator")
                            :why_this_plan (deterministic-explanation row)
                            :cost_formula (:cost_formula sel-ev)
@@ -479,7 +492,10 @@
                            :timeline [{:label "Order created" :date (:ordered_date row) :basis "observed"}
                                       {:label "Needed by" :date (:needed_by row) :basis "observed"}
                                       {:label "Estimated transit" :days (:transit_days row) :basis "modeled (CEIL(km / 400))"}
-                                      {:label "Deadline check" :feasible (= "Y" (:on_time_feasible row)) :basis "modeled"}])
+                                      {:label "Deadline check"
+                                       :feasible deadline-feasible?
+                                       :overdue_vs_as_of overdue-as-of?
+                                       :basis (if overdue-as-of? "overdue vs planning as-of" "modeled")}])
        :quantity_reconciliation {:ordered ordered
                                  :fulfilled fulfilled
                                  :pending pending
@@ -601,12 +617,13 @@
         solved   (run-what-if-solver
                   db
                   ["--mode" "counterfactual"
+                   "--run-id" pinned
                    "--horizon" (str (:horizon_orders run))
-                   "--source-policy" (str (or (:source_policy run) "depot_first"))
+                   "--source-policy" (str (or (:source_policy run) "service_first_fallback"))
                    "--order-id" order-id
                    "--source-customer-id" (str (:source_customer_id cand))
                    "--carrier" (str (:carrier_name cand))
-                   "--time-limit" "6"])]
+                   "--time-limit" "10"])]
     (if (:ok solved)
       {:order_id                 order-id
        :candidate_route_id       cand-id
@@ -660,13 +677,15 @@
    _req]
   (let [db     (check-operations-access!)
         run    (resolve-pinned-run run_id)
+        pinned (:run_id run)
         args   (cond-> ["--mode" "override"
+                        "--run-id" pinned
                         "--horizon" (str (:horizon_orders run))
-                        "--source-policy" (str (or (:source_policy run) "depot_first"))
+                        "--source-policy" (str (or (:source_policy run) "service_first_fallback"))
                         "--order-id" order-id
                         "--source-customer-id" source_customer_id
                         "--carrier" carrier
-                        "--time-limit" "6"]
+                        "--time-limit" "10"]
                  quantity (into ["--quantity" (str quantity)]))
         solved (run-what-if-solver db args)]
     (assoc solved
@@ -676,26 +695,55 @@
 
 #_{:clj-kondo/ignore [:metabase/validate-defendpoint-has-response-schema]}
 (api.macros/defendpoint :get "/exceptions"
-  "Paginated queue of uncovered, partial, or deadline-late orders."
+  "Filterable, sortable, paginated queue of uncovered, partial, or deadline-late orders."
   [_route-params
-   {:keys [limit run_id]} :- [:map {:closed true} [:limit {:optional true} [:maybe :string]] [:run_id {:optional true} [:maybe :string]]]
+   {:keys [limit offset region q sort run_id]}
+   :- [:map {:closed true}
+       [:limit {:optional true} [:maybe :string]]
+       [:offset {:optional true} [:maybe :string]]
+       [:region {:optional true} [:maybe :string]]
+       [:q {:optional true} [:maybe :string]]
+       [:sort {:optional true} [:maybe :string]]
+       [:run_id {:optional true} [:maybe :string]]]
    _body _req]
   (check-operations-access!)
   (let [run     (resolve-pinned-run run_id)
         pinned  (:run_id run)
-        limit   (min 100 (max 1 (parse-long (str (or (request/limit) limit 50)))))
-        rows   (run-native-query
-                "SELECT a.allocation_id, a.order_id, a.destination_customer_id, a.destination_brewer,
-                        a.region, a.keg_size, a.needed_by, a.pending_units, a.allocated_units,
-                        a.uncovered_units, a.on_time_feasible, a.planning_status, a.explanation
-                 FROM nubrix_poc_allocations a
-                 WHERE a.run_id = ? AND (a.uncovered_units > 0 OR a.on_time_feasible = 'N')
-                 ORDER BY a.uncovered_units DESC, a.needed_by ASC
-                 LIMIT ?"
-                [pinned limit])]
-    {:data        (mapv #(assoc % :status (normalize-status %)) rows)
-     :run         run
-     :disclosures standard-disclosures}))
+        limit   (min 100 (max 1 (or (some-> limit parse-long) 50)))
+        offset  (max 0 (or (some-> offset parse-long) 0))
+        clauses (atom ["a.run_id = ?" "(a.uncovered_units > 0 OR a.on_time_feasible = 'N')"])
+        params  (atom [pinned])
+        _       (when-not (str/blank? region)
+                  (swap! clauses conj "a.region = ?")
+                  (swap! params conj region))
+        _       (when-not (str/blank? q)
+                  (swap! clauses conj "(a.order_id LIKE ? OR a.destination_brewer LIKE ? OR a.explanation LIKE ?)")
+                  (let [pat (str "%" (str/trim q) "%")]
+                    (swap! params into [pat pat pat])))
+        where-sql (str/join " AND " @clauses)
+        order-sql (case sort
+                    "due_asc" "a.needed_by ASC, a.uncovered_units DESC, a.order_id ASC"
+                    "severity" "CASE WHEN a.allocated_units = 0 THEN 0 ELSE 1 END ASC, a.uncovered_units DESC, a.needed_by ASC"
+                    "a.uncovered_units DESC, a.needed_by ASC, a.order_id ASC")
+        cnt-row (first (run-native-query
+                        (str "SELECT COUNT(*) AS cnt FROM nubrix_poc_allocations a WHERE " where-sql)
+                        @params))
+        total   (long (or (:cnt cnt-row) 0))
+        rows    (run-native-query
+                 (str "SELECT a.allocation_id, a.order_id, a.destination_customer_id, a.destination_brewer,
+                              a.region, a.keg_size, a.needed_by, a.pending_units, a.allocated_units,
+                              a.uncovered_units, a.on_time_feasible, a.planning_status, a.explanation
+                       FROM nubrix_poc_allocations a
+                       WHERE " where-sql "
+                       ORDER BY " order-sql "
+                       LIMIT ? OFFSET ?")
+                 (conj @params limit offset))]
+    {:data           (mapv #(assoc % :status (normalize-status %)) rows)
+     :total_matching total
+     :limit          limit
+     :offset         offset
+     :run            run
+     :disclosures    standard-disclosures}))
 
 #_{:clj-kondo/ignore [:metabase/validate-defendpoint-has-response-schema]}
 (api.macros/defendpoint :get "/inventory"
@@ -817,11 +865,13 @@
    _req]
   (let [db     (check-operations-access!)
         run    (resolve-pinned-run nil)
+        pinned (:run_id run)
         args   (cond-> ["--mode" "scenario"
+                        "--run-id" pinned
                         "--horizon" (str (:horizon_orders run))
-                        "--source-policy" (str (or (:source_policy run) "depot_first"))
+                        "--source-policy" (str (or (:source_policy run) "service_first_fallback"))
                         "--scenario-type" scenario_type
-                        "--time-limit" "8"]
+                        "--time-limit" "12"]
                  disabled_carrier    (into ["--disabled-carrier" disabled_carrier])
                  stock_pct           (into ["--stock-pct" (str stock_pct)])
                  deadline_days_delta (into ["--deadline-days-delta" (str deadline_days_delta)]))
@@ -905,7 +955,6 @@
                       LIMIT 10"
                      [pinned order_id]))]
     (assoc (deterministic-assistant-answer question order-row alts run)
-           :cited_ids []
            :disclosures standard-disclosures)))
 
 (def ^{:arglists '([request respond raise])} routes

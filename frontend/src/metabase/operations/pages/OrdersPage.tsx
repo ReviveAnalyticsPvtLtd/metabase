@@ -44,8 +44,10 @@ export function OrdersPage() {
   const region = searchParams.get("region") || "";
   const kegSize = searchParams.get("keg_size") || "";
   const exceptionsOnly = searchParams.get("exceptions_only") === "true";
+  const cursor = searchParams.get("cursor") || undefined;
+  const selectedIdParam = searchParams.get("selected") || "";
 
-  const [cursor, setCursor] = useState<string | undefined>(undefined);
+  const [cursorHistory, setCursorHistory] = useState<string[]>([]);
   const [searchInput, setSearchInput] = useState(q);
   const [data, setData] = useState<OrdersListResponse | null>(null);
   const [selectedOrder, setSelectedOrder] = useState<OrderQueueItem | null>(null);
@@ -53,10 +55,25 @@ export function OrdersPage() {
   const [showCopilot, setShowCopilot] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [reloadTick, setReloadTick] = useState(0);
 
   useEffect(() => {
     setSearchInput(q);
   }, [q]);
+
+  const selectOrder = useCallback(
+    (row: OrderQueueItem | null) => {
+      setSelectedOrder(row);
+      const next = new URLSearchParams(searchParams);
+      if (row) {
+        next.set("selected", row.order_id);
+      } else {
+        next.delete("selected");
+      }
+      setSearchParams(next, { replace: true });
+    },
+    [searchParams, setSearchParams],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -74,10 +91,14 @@ export function OrdersPage() {
       .then((res) => {
         if (!cancelled) {
           setData(res);
+          const matchFromUrl = selectedIdParam
+            ? res.data.find((o) => o.order_id === selectedIdParam)
+            : undefined;
           setSelectedOrder((prev) =>
-            prev && res.data.some((o) => o.order_id === prev.order_id)
-              ? prev
-              : res.data[0] || null,
+            matchFromUrl ||
+            (prev && res.data.find((o) => o.order_id === prev.order_id)) ||
+            res.data[0] ||
+            null,
           );
           setLoading(false);
         }
@@ -91,7 +112,7 @@ export function OrdersPage() {
     return () => {
       cancelled = true;
     };
-  }, [q, status, region, kegSize, exceptionsOnly, cursor]);
+  }, [q, status, region, kegSize, exceptionsOnly, cursor, reloadTick, selectedIdParam]);
 
   const updateFilter = useCallback(
     (key: string, value: string | boolean) => {
@@ -101,11 +122,40 @@ export function OrdersPage() {
       } else {
         next.set(key, String(value));
       }
-      setCursor(undefined);
+      next.delete("cursor");
+      setCursorHistory([]);
       setSearchParams(next);
     },
     [searchParams, setSearchParams],
   );
+
+  const clearAllFilters = useCallback(() => {
+    setCursorHistory([]);
+    setSearchInput("");
+    setSearchParams(new URLSearchParams());
+  }, [setSearchParams]);
+
+  const goToNextPage = useCallback(() => {
+    if (!data?.next_cursor) {
+      return;
+    }
+    setCursorHistory((prev) => [...prev, cursor || ""]);
+    const next = new URLSearchParams(searchParams);
+    next.set("cursor", data.next_cursor);
+    setSearchParams(next);
+  }, [data?.next_cursor, cursor, searchParams, setSearchParams]);
+
+  const goToPrevPage = useCallback(() => {
+    const prevCursor = cursorHistory[cursorHistory.length - 1];
+    setCursorHistory((prev) => prev.slice(0, -1));
+    const next = new URLSearchParams(searchParams);
+    if (!prevCursor) {
+      next.delete("cursor");
+    } else {
+      next.set("cursor", prevCursor);
+    }
+    setSearchParams(next);
+  }, [cursorHistory, searchParams, setSearchParams]);
 
   const handleSearchSubmit = useCallback(
     (e: React.FormEvent) => {
@@ -120,22 +170,61 @@ export function OrdersPage() {
     const markers: MapMarkerSpec[] = [];
     const lines: MapLineSpec[] = [];
 
+    // Aggregate orders by region so the overview map never overlaps 50 destination pins
+    const byRegion = new Map<
+      string,
+      { latSum: number; lngSum: number; coordCnt: number; orders: number; uncoveredKegs: number }
+    >();
     for (const row of rows) {
+      const reg = row.region || "Other";
+      const cur = byRegion.get(reg) || {
+        latSum: 0,
+        lngSum: 0,
+        coordCnt: 0,
+        orders: 0,
+        uncoveredKegs: 0,
+      };
+      cur.orders += 1;
+      cur.uncoveredKegs += Number(row.uncovered_units || 0);
       if (row.dest_lat != null && row.dest_lng != null) {
-        const isSel = selectedOrder?.order_id === row.order_id;
-        markers.push({
-          id: `dest-${row.order_id}`,
-          lat: Number(row.dest_lat),
-          lng: Number(row.dest_lng),
-          label: `${row.order_id} · ${row.destination_brewer}`,
-          badgeText: row.status,
-          sublabel: `${row.keg_size} · Pending ${row.pending_units} · Proposed ${row.allocated_units} · Shortfall ${row.uncovered_units}`,
-          color: statusColor(row.status),
-          radius: isSel ? 10 : 7,
-          selected: isSel,
-          onClick: () => setSelectedOrder(row),
-        });
+        cur.latSum += Number(row.dest_lat);
+        cur.lngSum += Number(row.dest_lng);
+        cur.coordCnt += 1;
       }
+      byRegion.set(reg, cur);
+    }
+
+    for (const [reg, agg] of byRegion.entries()) {
+      if (agg.coordCnt === 0) {
+        continue;
+      }
+      markers.push({
+        id: `region-${reg}`,
+        lat: agg.latSum / agg.coordCnt,
+        lng: agg.lngSum / agg.coordCnt,
+        label: `${reg} Region (${agg.orders} orders)`,
+        badgeText: agg.uncoveredKegs > 0 ? `${agg.uncoveredKegs.toLocaleString()} uncovered` : "Covered",
+        sublabel: `Click to filter by ${reg} region`,
+        color: agg.uncoveredKegs > 0 ? "#D97706" : "#16A34A",
+        radius: 9,
+        selected: region === reg,
+        onClick: () => updateFilter("region", region === reg ? "" : reg),
+      });
+    }
+
+    // Reveal individual source & destination pins ONLY for the selected order
+    if (selectedOrder && selectedOrder.dest_lat != null && selectedOrder.dest_lng != null) {
+      markers.push({
+        id: `sel-dest-${selectedOrder.order_id}`,
+        lat: Number(selectedOrder.dest_lat),
+        lng: Number(selectedOrder.dest_lng),
+        label: `Destination: ${selectedOrder.order_id} · ${selectedOrder.destination_brewer}`,
+        badgeText: selectedOrder.status,
+        sublabel: `${selectedOrder.keg_size} · Pending ${selectedOrder.pending_units} · Proposed ${selectedOrder.allocated_units}`,
+        color: statusColor(selectedOrder.status),
+        radius: 10,
+        selected: true,
+      });
     }
 
     if (
@@ -147,7 +236,7 @@ export function OrdersPage() {
       selectedOrder.dest_lng != null
     ) {
       markers.push({
-        id: `src-${selectedOrder.order_id}`,
+        id: `sel-src-${selectedOrder.order_id}`,
         lat: Number(selectedOrder.src_lat),
         lng: Number(selectedOrder.src_lng),
         label: `Source: ${selectedOrder.source_hub}`,
@@ -172,7 +261,7 @@ export function OrdersPage() {
     }
 
     return { mapMarkers: markers, mapLines: lines };
-  }, [data, selectedOrder]);
+  }, [data, selectedOrder, region, updateFilter]);
 
   return (
     <Box p="lg" maw={1560} mx="auto">
@@ -188,7 +277,7 @@ export function OrdersPage() {
             {showMap ? t`Hide Map` : t`Show Map`}
           </Button>
           <Button variant="default" onClick={() => setShowCopilot((v) => !v)}>
-            {showCopilot ? t`Hide AI Copilot` : t`Ask AI Copilot`}
+            {showCopilot ? t`Hide Plan Explanation` : t`Plan Explanation`}
           </Button>
           <Button variant="default" onClick={() => navigate("/operations/scenarios")}>
             {t`Scenario Lab`}
@@ -202,7 +291,9 @@ export function OrdersPage() {
             }}
             onClick={() => navigate("/operations/exceptions")}
           >
-            {t`Exceptions`}
+            {data?.run?.orders_uncovered != null
+              ? t`Exceptions (${data.run.orders_uncovered + (data.run.orders_partially_covered || 0)})`
+              : t`Exceptions`}
           </Button>
         </Group>
       </Flex>
@@ -262,9 +353,14 @@ export function OrdersPage() {
 
       {error && (
         <Box p="md" mb="md" style={{ border: "1px solid var(--mb-color-error)", borderRadius: 8 }}>
-          <Text c="error" fw={600}>
-            {error}
-          </Text>
+          <Flex justify="space-between" align="center" gap="sm" wrap="wrap">
+            <Text c="error" fw={600}>
+              {error}
+            </Text>
+            <Button size="xs" variant="default" onClick={() => setReloadTick((v) => v + 1)}>
+              {t`Retry`}
+            </Button>
+          </Flex>
         </Box>
       )}
 
@@ -276,9 +372,19 @@ export function OrdersPage() {
         </Box>
       ) : !data || data.data.length === 0 ? (
         <Box p="xl" style={{ border: "1px dashed var(--mb-color-border)", borderRadius: 8 }}>
-          <Text size="sm" c="text-secondary">
-            {t`No orders match the selected filters in the current planning horizon.`}
-          </Text>
+          <Flex justify="space-between" align="center" gap="sm" wrap="wrap">
+            <Text size="sm" c="text-secondary">
+              {t`No orders match the selected filters in the current planning horizon.`}
+            </Text>
+            <Group gap="xs">
+              <Button size="xs" variant="default" onClick={clearAllFilters}>
+                {t`Clear filters`}
+              </Button>
+              <Button size="xs" variant="subtle" onClick={() => setReloadTick((v) => v + 1)}>
+                {t`Retry`}
+              </Button>
+            </Group>
+          </Flex>
         </Box>
       ) : (
         <>
@@ -288,8 +394,9 @@ export function OrdersPage() {
                 markers={mapMarkers}
                 lines={mapLines}
                 height={340}
-                title={t`Active Horizon Orders & Selected Route Preview`}
-                subtitle={t`Schematic lane preview (modeled distance, not turn-by-turn GPS). Click any pin or table row to preview.`}
+                fitKey={selectedOrder?.order_id || `orders-${region || "all"}`}
+                title={t`Regional Order Summary & Selected Route Preview`}
+                subtitle={t`Regional clusters summarize page orders; individual pins show the selected order only (schematic distance, not road GPS).`}
                 legendItems={[
                   { label: t`Selected Source Hub`, color: "#2563EB" },
                   { label: t`Fully covered`, color: "#16A34A" },
@@ -325,16 +432,25 @@ export function OrdersPage() {
                     variant="filled"
                     onClick={() => navigate(`/operations/orders/${encodeURIComponent(selectedOrder.order_id)}`)}
                   >
-                    {t`Inspect Route & Alternatives →`}
+                    {t`Open order →`}
                   </Button>
                 </Flex>
               )}
             </Box>
           )}
 
-          <Text size="xs" c="text-secondary" mb="xs">
-            {t`Showing ${data.data.length} orders (${data.total_matching.toLocaleString()} matching in current horizon)`}
-          </Text>
+          <Flex justify="space-between" align="center" mb="xs" wrap="wrap" gap="xs">
+            <Text size="xs" c="text-secondary">
+              {(() => {
+                const start = cursorHistory.length * 50 + 1;
+                const end = cursorHistory.length * 50 + data.data.length;
+                return t`Showing ${start}–${end} of ${data.total_matching.toLocaleString()} orders`;
+              })()}
+            </Text>
+            <Text size="xs" c="text-secondary">
+              {t`Sorted: Fulfilled first (Fully covered → Partial → Needs attention)`}
+            </Text>
+          </Flex>
           <Box style={{ overflowX: "auto", border: "1px solid var(--mb-color-border)", borderRadius: 8 }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
@@ -360,7 +476,7 @@ export function OrdersPage() {
                   return (
                     <tr
                       key={row.allocation_id}
-                      onClick={() => setSelectedOrder(row)}
+                      onClick={() => selectOrder(row)}
                       style={{
                         cursor: "pointer",
                         borderBottom: "1px solid var(--mb-color-border)",
@@ -396,7 +512,7 @@ export function OrdersPage() {
                             navigate(`/operations/orders/${encodeURIComponent(row.order_id)}`);
                           }}
                         >
-                          {t`Inspect`}
+                          {t`Open order`}
                         </Button>
                       </td>
                     </tr>
@@ -409,17 +525,17 @@ export function OrdersPage() {
           <Flex justify="space-between" align="center" mt="md">
             <Button
               variant="default"
-              disabled={!cursor}
-              onClick={() => setCursor(undefined)}
+              disabled={cursorHistory.length === 0}
+              onClick={goToPrevPage}
             >
-              {t`Back to first page`}
+              {t`Previous`}
             </Button>
             <Button
               variant="default"
               disabled={!data.has_more || !data.next_cursor}
-              onClick={() => data.next_cursor && setCursor(data.next_cursor)}
+              onClick={goToNextPage}
             >
-              {t`Next page`}
+              {t`Next`}
             </Button>
           </Flex>
         </>

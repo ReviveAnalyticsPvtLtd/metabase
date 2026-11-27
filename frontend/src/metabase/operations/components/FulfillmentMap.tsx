@@ -62,6 +62,7 @@ export function FulfillmentMap({
   subtitle,
   legendItems = [],
   emptyMessage,
+  fitKey,
 }: {
   markers: MapMarkerSpec[];
   lines?: MapLineSpec[];
@@ -70,10 +71,13 @@ export function FulfillmentMap({
   subtitle?: string;
   legendItems?: MapLegendItem[];
   emptyMessage?: string;
+  fitKey?: string;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
   const layerGroupRef = useRef<L.LayerGroup | null>(null);
+  const lastFitKeyRef = useRef<string | undefined>(undefined);
+  const latestBoundsRef = useRef<[number, number][]>([]);
   const [tileError, setTileError] = useState(false);
 
   const validMarkers = useMemo(
@@ -189,22 +193,49 @@ export function FulfillmentMap({
       circle.addTo(group);
     }
 
-    if (boundsCoords.length === 1) {
-      map.setView(boundsCoords[0], 7, { animate: false });
-    } else if (boundsCoords.length > 1) {
-      map.fitBounds(L.latLngBounds(boundsCoords), {
-        padding: [36, 36],
-        maxZoom: 10,
-        animate: false,
-      });
-    } else {
+    latestBoundsRef.current = boundsCoords;
+    const effectiveFitKey = fitKey ?? "__default__";
+    const shouldFit =
+      boundsCoords.length > 0 && lastFitKeyRef.current !== effectiveFitKey;
+
+    if (shouldFit) {
+      lastFitKeyRef.current = effectiveFitKey;
+      if (boundsCoords.length === 1) {
+        map.setView(boundsCoords[0], 7, { animate: false });
+      } else {
+        map.fitBounds(L.latLngBounds(boundsCoords), {
+          padding: [40, 40],
+          maxZoom: 10,
+          animate: false,
+        });
+      }
+    } else if (boundsCoords.length === 0 && lastFitKeyRef.current === undefined) {
       map.setView([22.5, 79.0], 5, { animate: false });
     }
 
     setTimeout(() => {
       map.invalidateSize();
     }, 50);
-  }, [validMarkers, validLines]);
+  }, [validMarkers, validLines, fitKey]);
+
+  const handleFitSelectedRoute = () => {
+    const map = mapRef.current;
+    const coords = latestBoundsRef.current;
+    if (!map) {
+      return;
+    }
+    if (coords.length === 1) {
+      map.setView(coords[0], 7, { animate: false });
+    } else if (coords.length > 1) {
+      map.fitBounds(L.latLngBounds(coords), {
+        padding: [40, 40],
+        maxZoom: 10,
+        animate: false,
+      });
+    } else {
+      map.setView([22.5, 79.0], 5, { animate: false });
+    }
+  };
 
   return (
     <Box
@@ -241,26 +272,29 @@ export function FulfillmentMap({
               </Text>
             )}
           </div>
-          {legendItems.length > 0 && (
-            <Group gap="sm" wrap="wrap">
-              {legendItems.map((item) => (
-                <Group key={item.label} gap={5} wrap="nowrap">
-                  <span
-                    style={{
-                      width: 9,
-                      height: 9,
-                      borderRadius: "50%",
-                      backgroundColor: item.color,
-                      display: "inline-block",
-                    }}
-                  />
-                  <Text size="xs" c="text-secondary">
-                    {item.label}
-                  </Text>
-                </Group>
-              ))}
-            </Group>
-          )}
+          <Group gap="sm" wrap="wrap">
+            {legendItems.map((item) => (
+              <Group key={item.label} gap={5} wrap="nowrap">
+                <span
+                  style={{
+                    width: 9,
+                    height: 9,
+                    borderRadius: "50%",
+                    backgroundColor: item.color,
+                    display: "inline-block",
+                  }}
+                />
+                <Text size="xs" c="text-secondary">
+                  {item.label}
+                </Text>
+              </Group>
+            ))}
+            {validMarkers.length > 0 && (
+              <Button size="xs" variant="default" onClick={handleFitSelectedRoute}>
+                {t`Fit selected route`}
+              </Button>
+            )}
+          </Group>
         </Flex>
       )}
       {tileError && (

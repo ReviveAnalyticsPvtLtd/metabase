@@ -4,9 +4,12 @@ Stores runs in nubrix_poc_* tables without mutating existing tables or historica
 Provides atomic active run pointer switching, verification invariants, and rollback.
 """
 
+import base64
 from datetime import date, datetime, timezone
+import hashlib
 import json
 from typing import Any, Dict, List, Optional, Tuple
+import zlib
 
 import pymysql
 
@@ -96,6 +99,23 @@ CREATE_TABLES_SQL = [
         KEY `idx_evid_run_order` (`run_id`, `order_id`)
     ) ENGINE=InnoDB;
     """,
+    """
+    CREATE TABLE IF NOT EXISTS `nubrix_poc_snapshots` (
+        `run_id` VARCHAR(64) PRIMARY KEY,
+        `snapshot_hash` VARCHAR(64) NOT NULL,
+        `snapshot_json` LONGTEXT NOT NULL,
+        `created_at` DATETIME NOT NULL
+    ) ENGINE=InnoDB;
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS `nubrix_poc_distance_matrix` (
+        `OriginCustomerId` VARCHAR(64) NOT NULL,
+        `DestCustomerId` VARCHAR(64) NOT NULL,
+        `RoadDistanceKm` INT NOT NULL,
+        `lane_source` VARCHAR(64) NOT NULL DEFAULT 'synthetic_haversine_proxy',
+        PRIMARY KEY (`OriginCustomerId`, `DestCustomerId`)
+    ) ENGINE=InnoDB;
+    """,
 ]
 
 
@@ -124,6 +144,7 @@ class PocStorageManager:
             ("nubrix_poc_runs", "objective_policy", "VARCHAR(64) NULL"),
             ("nubrix_poc_runs", "split_policy", "VARCHAR(64) NULL"),
             ("nubrix_poc_runs", "omitted_candidates_total", "INT NULL"),
+            ("nubrix_poc_runs", "snapshot_hash", "VARCHAR(64) NULL"),
             ("nubrix_poc_allocations", "selected_candidate_id", "INT NULL"),
             ("nubrix_poc_allocations", "decision_stage", "VARCHAR(32) NULL"),
             ("nubrix_poc_allocations", "carrier_id", "VARCHAR(64) NULL"),
@@ -315,6 +336,56 @@ class PocStorageManager:
             "allocated_kegs": total_allocated,
             "total_freight_inr": total_freight,
         }
+
+    def save_snapshot(self, run_id: str, snapshot: Dict[str, Any]) -> str:
+        """Persist compressed immutable snapshot JSON and SHA-256 hash for a published run."""
+        payload = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
+        snap_hash = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        compressed = "zlib+b64:" + base64.b64encode(zlib.compress(payload.encode("utf-8"), level=6)).decode("ascii")
+        now_dt = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        conn = self._get_connection()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO nubrix_poc_snapshots (run_id, snapshot_hash, snapshot_json, created_at)
+                    VALUES (%s, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE snapshot_hash = VALUES(snapshot_hash), snapshot_json = VALUES(snapshot_json)
+                    """,
+                    (run_id, snap_hash, compressed, now_dt),
+                )
+                cursor.execute(
+                    "UPDATE nubrix_poc_runs SET snapshot_hash = %s WHERE run_id = %s",
+                    (snap_hash, run_id),
+                )
+            conn.commit()
+            return snap_hash
+        finally:
+            conn.close()
+
+    def load_snapshot_by_run_id(self, run_id: str) -> Tuple[Dict[str, Any], str]:
+        """Load and verify the immutable snapshot for a run_id."""
+        conn = self._get_connection()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT snapshot_hash, snapshot_json FROM nubrix_poc_snapshots WHERE run_id = %s LIMIT 1",
+                    (run_id,),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    raise ValueError(f"No immutable snapshot persisted for run {run_id}")
+                expected_hash, stored = row
+                if stored.startswith("zlib+b64:"):
+                    payload = zlib.decompress(base64.b64decode(stored[len("zlib+b64:"):])).decode("utf-8")
+                else:
+                    payload = stored
+                actual_hash = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+                if actual_hash != expected_hash:
+                    raise ValueError(f"Snapshot hash mismatch for run {run_id}: {actual_hash} != {expected_hash}")
+                return json.loads(payload), actual_hash
+        finally:
+            conn.close()
 
     def rollback_to_run(self, previous_run_id: str) -> None:
         """Atomically point active_run back to a previous run."""

@@ -81,6 +81,10 @@ export function fetchOrderCounterfactual(
 
 export function fetchOperationsExceptions(params: {
   limit?: number;
+  offset?: number;
+  region?: string;
+  q?: string;
+  sort?: string;
 } = {}): Promise<OrdersListResponse> {
   return fetchJson<OrdersListResponse>(
     `/api/operations/exceptions${buildQuery(params)}`,

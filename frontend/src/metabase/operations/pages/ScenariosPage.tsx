@@ -26,7 +26,10 @@ export function ScenariosPage() {
 
   const [simLoading, setSimLoading] = useState(false);
   const [simResult, setSimResult] = useState<ScenarioRunResponse | null>(null);
+  const [simTimestamp, setSimTimestamp] = useState<string | null>(null);
   const [disabledCarrier, setDisabledCarrier] = useState<string>("EastWest Transport");
+  const [stockPct, setStockPct] = useState<string>("0.8");
+  const [deadlineDelta, setDeadlineDelta] = useState<string>("-2");
 
   useEffect(() => {
     let cancelled = false;
@@ -50,7 +53,7 @@ export function ScenariosPage() {
 
   const handleRunScenario = async (
     scenarioType: string,
-    opts?: { disabled_carrier?: string; stock_pct?: number },
+    opts?: { disabled_carrier?: string; stock_pct?: number; deadline_days_delta?: number },
   ) => {
     setSimLoading(true);
     setError(null);
@@ -60,11 +63,20 @@ export function ScenariosPage() {
         ...opts,
       });
       setSimResult(res);
+      setSimTimestamp(new Date().toLocaleTimeString());
     } catch (err) {
       setError(err instanceof Error ? err.message : t`Simulation failed.`);
     } finally {
       setSimLoading(false);
     }
+  };
+
+  const handleResetBaseline = () => {
+    setDisabledCarrier("EastWest Transport");
+    setStockPct("0.8");
+    setDeadlineDelta("-2");
+    setSimResult(null);
+    setSimTimestamp(null);
   };
 
   const active = compareData?.active_plan;
@@ -182,51 +194,118 @@ export function ScenariosPage() {
           </Flex>
 
           <Box p="md" mb="md" style={{ border: "1px solid var(--mb-color-border)", borderRadius: 10 }}>
-            <Title order={4} mb="xs">{t`Interactive What-If Stress Tests (Read-Only)`}</Title>
-            <Text size="xs" c="text-secondary" mb="sm">
-              {t`Test carrier disruptions, approved peer-Brewer exception transfers, or depot stock shocks without modifying live data.`}
-            </Text>
-            <Flex gap="sm" wrap="wrap" align="flex-end">
-              <Select
-                label={t`Disable Carrier`}
-                value={disabledCarrier}
-                onChange={(v) => setDisabledCarrier(v || "EastWest Transport")}
-                data={[
-                  "EastWest Transport",
-                  "Deccan Freight",
-                  "MetroLine Cargo",
-                  "SwiftHaul Logistics",
-                  "BlueRoute Carriers",
-                  "PrimeKeg Mobility",
-                ]}
-              />
-              <Button
-                loading={simLoading}
-                onClick={() => handleRunScenario("carrier_outage", { disabled_carrier: disabledCarrier })}
-              >
-                {t`Simulate Carrier Outage`}
-              </Button>
-              <Button
-                variant="default"
-                loading={simLoading}
-                onClick={() => handleRunScenario("unrestricted_benchmark")}
-              >
-                {t`Re-Solve Unrestricted Benchmark`}
-              </Button>
-              <Button
-                variant="default"
-                loading={simLoading}
-                onClick={() => handleRunScenario("stock_shock", { stock_pct: 0.8 })}
-              >
-                {t`Re-Solve -20% Depot Stock Shock`}
-              </Button>
-              <Button
-                variant="default"
-                loading={simLoading}
-                onClick={() => handleRunScenario("deadline_shift", { deadline_days_delta: -2 })}
-              >
-                {t`Re-Solve -2d Deadline Shift`}
-              </Button>
+            <Flex justify="space-between" align="center" mb="xs" wrap="wrap" gap="xs">
+              <div>
+                <Title order={4}>{t`Operational Disruption & Policy Scenarios`}</Title>
+                <Text size="xs" c="text-secondary">
+                  {t`Test supply, carrier, policy, or due-date changes on the active baseline snapshot without changing the published plan.`}
+                </Text>
+              </div>
+              {simResult && (
+                <Button size="xs" variant="subtle" onClick={handleResetBaseline}>
+                  {t`Reset to baseline`}
+                </Button>
+              )}
+            </Flex>
+
+            <Flex gap="md" wrap="wrap" align="stretch">
+              <Box p="sm" style={{ flex: "1 1 240px", border: "1px solid var(--mb-color-border)", borderRadius: 8 }}>
+                <Text fw={600} size="sm" mb={4}>{t`Carrier outage`}</Text>
+                <Select
+                  label={t`Unavailable carrier`}
+                  value={disabledCarrier}
+                  onChange={(v) => setDisabledCarrier(v || "EastWest Transport")}
+                  data={[
+                    "EastWest Transport",
+                    "Deccan Freight",
+                    "MetroLine Cargo",
+                    "SwiftHaul Logistics",
+                    "BlueRoute Carriers",
+                    "PrimeKeg Mobility",
+                  ]}
+                  mb="xs"
+                />
+                <Button
+                  size="xs"
+                  loading={simLoading}
+                  onClick={() => handleRunScenario("carrier_outage", { disabled_carrier: disabledCarrier })}
+                >
+                  {t`Run carrier outage`}
+                </Button>
+              </Box>
+
+              <Box p="sm" style={{ flex: "1 1 240px", border: "1px solid var(--mb-color-border)", borderRadius: 8 }}>
+                <Text fw={600} size="sm" mb={4}>{t`Source inventory change`}</Text>
+                <Select
+                  label={t`Available stock level`}
+                  value={stockPct}
+                  onChange={(v) => setStockPct(v || "0.8")}
+                  data={[
+                    { value: "0.6", label: t`60% (−40% stock)` },
+                    { value: "0.8", label: t`80% (−20% stock)` },
+                    { value: "0.9", label: t`90% (−10% stock)` },
+                    { value: "1.2", label: t`120% (+20% stock)` },
+                  ]}
+                  mb="xs"
+                />
+                <Button
+                  size="xs"
+                  variant="default"
+                  loading={simLoading}
+                  onClick={() => handleRunScenario("stock_shock", { stock_pct: Number(stockPct) })}
+                >
+                  {t`Run inventory scenario`}
+                </Button>
+              </Box>
+
+              <Box p="sm" style={{ flex: "1 1 240px", border: "1px solid var(--mb-color-border)", borderRadius: 8 }}>
+                <Text fw={600} size="sm" mb={4}>{t`Due-date shift`}</Text>
+                <Select
+                  label={t`Shift needed-by dates`}
+                  value={deadlineDelta}
+                  onChange={(v) => setDeadlineDelta(v || "-2")}
+                  data={[
+                    { value: "-3", label: t`3 days earlier` },
+                    { value: "-2", label: t`2 days earlier` },
+                    { value: "2", label: t`2 days later` },
+                    { value: "5", label: t`5 days later` },
+                  ]}
+                  mb="xs"
+                />
+                <Button
+                  size="xs"
+                  variant="default"
+                  loading={simLoading}
+                  onClick={() => handleRunScenario("deadline_shift", { deadline_days_delta: Number(deadlineDelta) })}
+                >
+                  {t`Run due-date scenario`}
+                </Button>
+              </Box>
+
+              <Box p="sm" style={{ flex: "1 1 240px", border: "1px solid var(--mb-color-border)", borderRadius: 8 }}>
+                <Text fw={600} size="sm" mb={4}>{t`Sourcing policy comparison`}</Text>
+                <Text size="xs" c="text-secondary" mb="sm">
+                  {t`Compare strict Depot-Only (excluding peer Brewers) vs. Service-First Fallback.`}
+                </Text>
+                <Group gap="xs">
+                  <Button
+                    size="xs"
+                    variant="default"
+                    loading={simLoading}
+                    onClick={() => handleRunScenario("strict_depot_only")}
+                  >
+                    {t`Strict Depot-Only`}
+                  </Button>
+                  <Button
+                    size="xs"
+                    variant="default"
+                    loading={simLoading}
+                    onClick={() => handleRunScenario("service_first_fallback")}
+                  >
+                    {t`Service-First Fallback`}
+                  </Button>
+                </Group>
+              </Box>
             </Flex>
 
             {simResult && (
@@ -242,10 +321,10 @@ export function ScenariosPage() {
               >
                 <Flex justify="space-between" align="center" mb="xs" wrap="wrap" gap="xs">
                   <Title order={5}>{simResult.title}</Title>
-                  {simResult.solver_status && (
-                    <Badge size="xs" style={{ backgroundColor: "#E8F0FE", color: "#1967D2", textTransform: "none" }}>
-                      {t`Solver: ${simResult.solver_status}`}
-                    </Badge>
+                  {simTimestamp && (
+                    <Text size="xs" c="text-secondary">
+                      {t`Evaluated at ${simTimestamp} · Active plan unchanged`}
+                    </Text>
                   )}
                 </Flex>
                 <Text size="sm" mb="sm">{simResult.summary}</Text>

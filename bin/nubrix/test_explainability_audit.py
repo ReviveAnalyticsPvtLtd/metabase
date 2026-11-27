@@ -155,6 +155,93 @@ class ExplainabilityAuditTests(unittest.TestCase):
             any(ev.get("reason_code") == "POLICY_EXCLUDED_PEER_BREWER" for ev in outcomes["ORD-TARGET"].evidence)
         )
 
+    def test_service_first_fallback_prefers_facility_then_distributor_then_brewer(self):
+        snap = _sample_snapshot()
+        snap["as_of_date"] = "2026-01-02"
+        snap["directed_lanes"] = True
+        snap["customers"]["CUST-MAINT"] = {
+            "id": "CUST-MAINT", "name": "North Maint Depot", "type": "Maintenance Facility",
+            "region": "North", "lat": 28.5, "lon": 77.2,
+        }
+        snap["customers"]["CUST-DIST-S"] = {
+            "id": "CUST-DIST-S", "name": "North Dist Hub", "type": "Distributor",
+            "region": "North", "lat": 28.6, "lon": 77.3,
+        }
+        # Give Brewer cheaper/closer lane (10 km) than Maint (200 km) and Dist (100 km)
+        snap["stock"] = [
+            {"source": "CUST-MAINT", "sku": "50L", "available": 100},
+            {"source": "CUST-DIST-S", "sku": "50L", "available": 100},
+            {"source": "CUST-NEAR", "sku": "50L", "available": 100},
+        ]
+        snap["legs"].extend([
+            {"origin": "CUST-MAINT", "destination": "CUST-DEST", "km": 200},
+            {"origin": "CUST-DIST-S", "destination": "CUST-DEST", "km": 100},
+        ])
+        snap["orders"] = [
+            {
+                "id": "ORD-TARGET", "customer_id": "CUST-DEST", "sku": "50L",
+                "ordered_date": "2026-01-01", "needed_by_date": "2026-01-10",
+                "quantity_ordered": 50, "fulfilled_units": 0, "pending": 50,
+            }
+        ]
+        planner = OrToolsFulfillmentPlanner(
+            time_limit_seconds=5, max_candidates_per_order=12, source_policy="service_first_fallback"
+        )
+        res = planner.plan(snap)
+        out = res["outcomes"][0]
+        # Must prefer Maintenance Facility even though Brewer is closer/cheaper
+        self.assertEqual(out.source_customer_id, "CUST-MAINT")
+
+        # When Maintenance Facility has 0 stock, must prefer Distributor over Brewer
+        snap["stock"] = [
+            {"source": "CUST-DIST-S", "sku": "50L", "available": 100},
+            {"source": "CUST-NEAR", "sku": "50L", "available": 100},
+        ]
+        res2 = planner.plan(snap)
+        self.assertEqual(res2["outcomes"][0].source_customer_id, "CUST-DIST-S")
+
+        # When neither Maint nor Dist has stock, Brewer fallback covers the order
+        snap["stock"] = [{"source": "CUST-NEAR", "sku": "50L", "available": 100}]
+        res3 = planner.plan(snap)
+        self.assertEqual(res3["outcomes"][0].source_customer_id, "CUST-NEAR")
+        self.assertEqual(res3["outcomes"][0].allocated_units, 50)
+
+    def test_overdue_against_as_of_date_fails_closed(self):
+        snap = _sample_snapshot()
+        snap["as_of_date"] = "2026-11-27"
+        snap["orders"] = [
+            {
+                "id": "ORD-PAST", "customer_id": "CUST-DEST", "sku": "50L",
+                "ordered_date": "2026-01-01", "needed_by_date": "2026-01-04",
+                "quantity_ordered": 50, "fulfilled_units": 0, "pending": 50,
+            }
+        ]
+        planner = OrToolsFulfillmentPlanner(
+            time_limit_seconds=5, max_candidates_per_order=10, source_policy="service_first_fallback"
+        )
+        res = planner.plan(snap)
+        out = res["outcomes"][0]
+        self.assertEqual(out.allocated_units, 0)
+        self.assertEqual(out.on_time_feasible, "N")
+        self.assertTrue(any(ev.get("reason") == "overdue" for ev in out.evidence))
+
+    def test_forced_assignment_rejects_reverse_only_lane(self):
+        from solve_what_if import _solve_forced_order
+        snap = _sample_snapshot()
+        snap["as_of_date"] = "2026-01-02"
+        snap["directed_lanes"] = True
+        # Only CUST-DEST -> CUST-FAR exists, NOT CUST-FAR -> CUST-DEST
+        snap["legs"] = [
+            {"origin": "CUST-NEAR", "destination": "CUST-DEST", "km": 50},
+            {"origin": "CUST-DEST", "destination": "CUST-FAR", "km": 100},
+        ]
+        out = _solve_forced_order(
+            snap, "snap-hash", "RUN-TEST", "service_first_fallback",
+            "ORD-TARGET", "CUST-FAR", "SwiftHaul", None, 5
+        )
+        self.assertFalse(out["ok"])
+        self.assertFalse(out.get("feasible", True))
+
 
 if __name__ == "__main__":
     unittest.main()

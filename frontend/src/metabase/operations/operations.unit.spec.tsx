@@ -87,7 +87,7 @@ describe("MicroStar Operations Workspace", () => {
     expect(screen.getByText("Bhubaneswar Brewer 0090")).toBeInTheDocument();
     expect(screen.getAllByText("Partially covered").length).toBeGreaterThan(0);
     expect(screen.getByTestId("fulfillment-leaflet-map")).toBeInTheDocument();
-    expect(screen.getByText("Depot-First — approved facilities and distributors")).toBeInTheDocument();
+    expect(screen.getByText("Service-First Fallback — Facility > Distributor > Brewer")).toBeInTheDocument();
     expect(screen.queryByText("RUN-INTERNAL-HIDDEN")).not.toBeInTheDocument();
   });
 
@@ -171,7 +171,7 @@ describe("MicroStar Operations Workspace", () => {
     expect(screen.getByText("No validated shared-trip record is available for this proposal.")).toBeInTheDocument();
     expect(screen.getByTestId("ops-ai-copilot")).toBeInTheDocument();
     await waitFor(() => {
-      expect(screen.getByText("Selected in optimization run")).toBeInTheDocument();
+      expect(screen.getByText("Selected in active plan")).toBeInTheDocument();
     });
     expect(screen.queryByText("RUN-INTERNAL-HIDDEN")).not.toBeInTheDocument();
   });
@@ -192,7 +192,7 @@ describe("MicroStar Operations Workspace", () => {
     });
 
     renderWithProviders(<ExceptionsPage />);
-    expect(await screen.findByText("No exceptions in the current planning horizon.")).toBeInTheDocument();
+    expect(await screen.findByText("No exceptions match the selected filters.")).toBeInTheDocument();
 
     renderWithProviders(<InventoryPage />);
     expect(await screen.findByText("No inventory rows match the selected filters.")).toBeInTheDocument();

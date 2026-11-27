@@ -346,17 +346,29 @@ class OrToolsFulfillmentPlanner:
             def _source_sort_key(item: Tuple[str, int, int, List[Tuple[str, str, int]]]) -> Tuple[int, int]:
                 s_id, _, s_km, _ = item
                 s_type = customers.get(s_id, {}).get("type", "")
-                if source_policy in ("depot_first", "approved_peer_brewer"):
+                if source_policy in ("depot_first", "approved_peer_brewer", "service_first_fallback"):
                     tier = 0 if s_type == "Maintenance Facility" else (1 if s_type == "Distributor" else 2)
                     return (tier, s_km)
                 return (0, s_km)
 
             sources_with_dist.sort(key=_source_sort_key)
-            if len(sources_with_dist) > self.max_candidates_per_order:
-                candidates_truncated = True
-                omitted_by_order[oid] = len(sources_with_dist) - self.max_candidates_per_order
+            if source_policy == "service_first_fallback":
+                per_tier = max(8, self.max_candidates_per_order // 3)
+                selected_sources_for_order: List[Tuple[str, int, int, List[Tuple[str, str, int]]]] = []
+                tier_counts = {0: 0, 1: 0, 2: 0}
+                for item in sources_with_dist:
+                    t = _source_sort_key(item)[0]
+                    if tier_counts[t] < per_tier:
+                        selected_sources_for_order.append(item)
+                        tier_counts[t] += 1
+                omitted_count = max(0, len(sources_with_dist) - len(selected_sources_for_order))
             else:
-                omitted_by_order[oid] = 0
+                selected_sources_for_order = sources_with_dist[:self.max_candidates_per_order]
+                omitted_count = max(0, len(sources_with_dist) - len(selected_sources_for_order))
+
+            if omitted_count > 0:
+                candidates_truncated = True
+            omitted_by_order[oid] = omitted_count
 
             # Available carriers
             carrier_items = list(carriers.values()) if carriers else [
@@ -364,7 +376,7 @@ class OrToolsFulfillmentPlanner:
                 {"id": "CAR-02", "name": "Deccan Freight", "rate_inr": 1.85, "rate_paise": 185, "max_load": 700},
             ]
 
-            for src_id, avail_qty, km, r_legs in sources_with_dist[:self.max_candidates_per_order]:
+            for src_id, avail_qty, km, r_legs in selected_sources_for_order:
                 src_cust = customers.get(src_id, {})
                 src_name = src_cust.get("name", src_id)
                 transit_days = compute_transit_days(km) + (handling_days if distributor_mode == "physical_stop" and coord_dist_id not in (src_id, dest_id) else 0)
@@ -495,11 +507,33 @@ class OrToolsFulfillmentPlanner:
                     )
                 )
 
-        # Constraint 1: At most one primary fulfillment candidate per order
+        # Constraint 1: At most one primary fulfillment candidate per order (and honor forced_assignment if provided)
+        forced_assignment = snapshot.get("forced_assignment") or {}
         for oid, c_list in candidates_by_order.items():
             feas_list = [c for c in c_list if c.is_feasible]
-            if feas_list:
+            if oid in forced_assignment:
+                fa = forced_assignment[oid]
+                f_src = fa.get("source_customer_id")
+                f_car = fa.get("carrier")
+                matching = [
+                    c for c in feas_list
+                    if c.source_customer_id == f_src and (not f_car or c.carrier_name == f_car)
+                ]
+                if not matching:
+                    raise InvariantValidationError(
+                        f"Forced assignment for {oid} ({f_src} via {f_car}) has no feasible candidate under active constraints."
+                    )
+                model.Add(sum(choice_vars[c.candidate_id] for c in matching) == 1)
+                for c in feas_list:
+                    if c not in matching:
+                        model.Add(choice_vars[c.candidate_id] == 0)
+            elif feas_list:
                 model.Add(sum(choice_vars[c.candidate_id] for c in feas_list) <= 1)
+        for oid, fa in forced_assignment.items():
+            if not any(c.is_feasible for c in candidates_by_order.get(oid, [])):
+                raise InvariantValidationError(
+                    f"Forced assignment for {oid} ({fa.get('source_customer_id')} via {fa.get('carrier')}) is infeasible."
+                )
 
         # Constraint 2: Source stock capacity conservation
         stock_consumption = defaultdict(list)
@@ -514,47 +548,109 @@ class OrToolsFulfillmentPlanner:
         for intervals in vehicle_intervals.values():
             model.AddNoOverlap(intervals)
 
-        # Multi-Objective Lexicographic Setup:
-        # 1. Maximize on-time feasible orders (weighted by due-date urgency)
-        # 2. Maximize fulfilled keg volume
-        # 3. Minimize total freight cost (paise)
-        feasible_cover_terms = []
-        volume_cover_terms = []
-        freight_cost_terms = []
-
-        for c in feasible_candidates:
-            bvar = choice_vars[c.candidate_id]
-            urgency = order_urgency.get(c.order_id, 1)
-            feasible_cover_terms.append(urgency * bvar)
-            volume_cover_terms.append(c.quantity * bvar)
-            freight_cost_terms.append(c.freight_paise * bvar)
-
-        max_per_keg_paise = max(
-            (int(round(c.distance_km * c.cost_per_keg_km * PAISE_PER_INR)) for c in feasible_candidates),
-            default=0,
+        # True Staged Lexicographic Optimization:
+        # Stage 1: Maximize total feasible, on-time covered kegs
+        # Stage 2: Maximize earliest-due urgency
+        # Stage 3: Minimize Brewer-source kegs (for service_first_fallback / approved_peer_brewer)
+        # Stage 4: Minimize Distributor-source kegs (preferring Maintenance Facility)
+        # Stage 5: Minimize total modeled freight (paise)
+        volume_expr = sum(c.quantity * choice_vars[c.candidate_id] for c in feasible_candidates)
+        urgency_expr = sum(order_urgency.get(c.order_id, 1) * choice_vars[c.candidate_id] for c in feasible_candidates)
+        brewer_expr = sum(
+            c.quantity * choice_vars[c.candidate_id]
+            for c in feasible_candidates
+            if customers.get(c.source_customer_id, {}).get("type") == "Brewer"
         )
-        vol_weight = max(100_000, max_per_keg_paise * 2 + 10_000)
-        order_weight = vol_weight * 10
-
-        primary_obj = (
-            sum(feasible_cover_terms) * order_weight
-            + sum(volume_cover_terms) * vol_weight
-            - sum(freight_cost_terms)
+        dist_expr = sum(
+            c.quantity * choice_vars[c.candidate_id]
+            for c in feasible_candidates
+            if customers.get(c.source_customer_id, {}).get("type") == "Distributor"
         )
-        model.Maximize(primary_obj)
+        freight_expr = sum(c.freight_paise * choice_vars[c.candidate_id] for c in feasible_candidates)
 
         solver = cp_model.CpSolver()
         solver.parameters.num_search_workers = 1
-        solver.parameters.max_time_in_seconds = self.time_limit_seconds
 
-        status = solver.Solve(model)
-        raw_solver_status = solver.StatusName(status)
+        def _solve_stage(obj_expr, maximize: bool, budget_sec: float, prev_vals: Optional[Dict[int, int]]) -> int:
+            if prev_vals:
+                model.ClearHints()
+                for cid_var, val in prev_vals.items():
+                    model.AddHint(choice_vars[cid_var], val)
+            if maximize:
+                model.Maximize(obj_expr)
+            else:
+                model.Minimize(obj_expr)
+            solver.parameters.max_time_in_seconds = max(0.5, budget_sec)
+            return solver.Solve(model)
 
-        # Fail closed on invalid or unknown solver states before Stage 2 or outcome emission
-        if feasible_candidates and status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-            raise InvariantValidationError(
-                f"CP-SAT solver failed closed with status {raw_solver_status} (status_code={status})"
-            )
+        prev_solution: Optional[Dict[int, int]] = None
+        stage1_budget = max(4.0, float(self.time_limit_seconds) * 0.45)
+        stage_budget = max(1.5, float(self.time_limit_seconds) * 0.14)
+        status = cp_model.OPTIMAL
+        all_stages_optimal = True
+        use_prev_fallback = False
+
+        if feasible_candidates:
+            # Stage 1: Maximize covered kegs
+            status = _solve_stage(volume_expr, True, stage1_budget, prev_solution)
+            if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+                raise InvariantValidationError(
+                    f"CP-SAT solver failed closed at Stage 1 with status {solver.StatusName(status)} (status_code={status})"
+                )
+            if status != cp_model.OPTIMAL:
+                all_stages_optimal = False
+            opt_vol = int(round(solver.ObjectiveValue()))
+            prev_solution = {c.candidate_id: solver.Value(choice_vars[c.candidate_id]) for c in feasible_candidates}
+            model.Add(volume_expr >= opt_vol)
+
+            # Stage 2: Maximize earliest-due urgency
+            status2 = _solve_stage(urgency_expr, True, stage_budget * 0.6, prev_solution)
+            if status2 in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+                if status2 != cp_model.OPTIMAL:
+                    all_stages_optimal = False
+                opt_urg = int(round(solver.ObjectiveValue()))
+                prev_solution = {c.candidate_id: solver.Value(choice_vars[c.candidate_id]) for c in feasible_candidates}
+                model.Add(urgency_expr >= opt_urg)
+            else:
+                all_stages_optimal = False
+
+            # Stage 3: Minimize Brewer-source kegs (fallback tier)
+            if source_policy in ("service_first_fallback", "approved_peer_brewer"):
+                status3 = _solve_stage(brewer_expr, False, stage_budget * 0.6, prev_solution)
+                if status3 in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+                    if status3 != cp_model.OPTIMAL:
+                        all_stages_optimal = False
+                    opt_brewer = int(round(solver.ObjectiveValue()))
+                    prev_solution = {c.candidate_id: solver.Value(choice_vars[c.candidate_id]) for c in feasible_candidates}
+                    model.Add(brewer_expr <= opt_brewer)
+                else:
+                    all_stages_optimal = False
+
+            # Stage 4: Minimize Distributor-source kegs (prefer Maintenance Facility)
+            if source_policy in ("service_first_fallback", "depot_first", "approved_peer_brewer"):
+                status4 = _solve_stage(dist_expr, False, stage_budget * 0.6, prev_solution)
+                if status4 in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+                    if status4 != cp_model.OPTIMAL:
+                        all_stages_optimal = False
+                    opt_dist = int(round(solver.ObjectiveValue()))
+                    prev_solution = {c.candidate_id: solver.Value(choice_vars[c.candidate_id]) for c in feasible_candidates}
+                    model.Add(dist_expr <= opt_dist)
+                else:
+                    all_stages_optimal = False
+
+            # Stage 5: Minimize modeled freight
+            status5 = _solve_stage(freight_expr, False, stage_budget * 1.2, prev_solution)
+            if status5 in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+                status = status5
+                if status5 != cp_model.OPTIMAL:
+                    all_stages_optimal = False
+            else:
+                # Preserve validated Stage 1-4 feasible solution if Stage 5 freight polishing hits time limit
+                status = cp_model.FEASIBLE
+                all_stages_optimal = False
+                use_prev_fallback = True
+
+        raw_solver_status = solver.StatusName(status) if feasible_candidates else "OPTIMAL"
 
         # 3. Build Outcomes & Residual Partial-Allocation Pass
         selected_candidates: Dict[str, Tuple[CandidateOption, int]] = {}
@@ -564,7 +660,12 @@ class OrToolsFulfillmentPlanner:
         used_vehicle_intervals: Dict[str, List[Tuple[int, int]]] = defaultdict(list)
         if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
             for c in feasible_candidates:
-                if solver.Value(choice_vars[c.candidate_id]) == 1:
+                val = (
+                    prev_solution.get(c.candidate_id, 0)
+                    if use_prev_fallback and prev_solution is not None
+                    else solver.Value(choice_vars[c.candidate_id])
+                )
+                if val == 1:
                     selected_candidates[c.order_id] = (c, c.quantity)
                     selected_stage_by_order[c.order_id] = "STAGE_1_CPSAT"
                     allocations_by_source_sku[(c.source_customer_id, c.sku)].append((c.order_id, c.quantity))
@@ -607,7 +708,7 @@ class OrToolsFulfillmentPlanner:
                     break
 
         planning_mode = "MODE_B_TRIP_LEVEL" if vehicles else "MODE_A_ORDER_LEVEL"
-        objective_policy = "lexicographic_equivalent_weighted_v2"
+        objective_policy = "lexicographic_staged_service_role_freight_v3"
         split_policy = "single_source_per_order"
         omitted_total = sum(omitted_by_order.values())
 
@@ -681,12 +782,12 @@ class OrToolsFulfillmentPlanner:
                     ev["reason"] = "Order unallocated under CP-SAT and Stage 2 residual constraints."
 
         horizon_truncated = bool(snapshot.get("provenance", {}).get("horizon_truncated", False))
-        if status == cp_model.OPTIMAL:
+        if status == cp_model.OPTIMAL and all_stages_optimal:
             if not candidates_truncated and not stage2_modified and not horizon_truncated:
                 solver_status_name = "OPTIMAL_OVER_CANDIDATES"
             else:
                 solver_status_name = "FEASIBLE (bounded_candidates_and_residual)"
-        elif status == cp_model.FEASIBLE:
+        elif status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
             solver_status_name = "FEASIBLE (time_limit_or_bounded)"
         elif status == cp_model.INFEASIBLE:
             solver_status_name = "INFEASIBLE"

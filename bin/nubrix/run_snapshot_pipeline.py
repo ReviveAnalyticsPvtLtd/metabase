@@ -10,6 +10,7 @@
 import argparse
 from datetime import date, datetime, timezone
 import json
+import math
 import os
 import sys
 import time
@@ -41,13 +42,90 @@ def get_railway_params() -> Dict[str, Any]:
     }
 
 
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    r = 6371.0
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp = math.radians(lat2 - lat1)
+    dl = math.radians(lon2 - lon1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * r * math.asin(math.sqrt(a))
+
+
+def populate_supplemental_lanes(railway_params: Dict[str, Any]) -> int:
+    """Populate nubrix_poc_distance_matrix for missing origin->destination pairs using Haversine*1.25.
+
+    Never mutates FreightRoadDistance.
+    """
+    import pymysql
+    conn = pymysql.connect(
+        host=railway_params["host"],
+        port=int(railway_params["port"]),
+        user=railway_params["user"],
+        password=railway_params["password"],
+        database=railway_params["database"],
+        connect_timeout=15,
+        charset="utf8mb4",
+    )
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT CustomerId, CustomerType, Latitude, Longitude
+                FROM dimCustomer
+                WHERE Latitude IS NOT NULL AND Longitude IS NOT NULL
+                  AND NOT (Latitude = 0 AND Longitude = 0)
+            """)
+            custs = cursor.fetchall()
+            brewers = [(cid, float(lat), float(lon)) for cid, ctype, lat, lon in custs if ctype == "Brewer"]
+            all_nodes = [(cid, float(lat), float(lon)) for cid, _ctype, lat, lon in custs]
+
+            cursor.execute("SELECT OriginCustomerId, DestCustomerId FROM FreightRoadDistance")
+            existing = set(cursor.fetchall())
+
+            rows = []
+            for o_id, o_lat, o_lon in all_nodes:
+                for d_id, d_lat, d_lon in brewers:
+                    if o_id == d_id or (o_id, d_id) in existing:
+                        continue
+                    km = max(1, int(round(_haversine_km(o_lat, o_lon, d_lat, d_lon) * 1.25)))
+                    rows.append((o_id, d_id, km, "synthetic_haversine_proxy"))
+
+            if rows:
+                cursor.executemany(
+                    """
+                    INSERT INTO nubrix_poc_distance_matrix (OriginCustomerId, DestCustomerId, RoadDistanceKm, lane_source)
+                    VALUES (%s, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE RoadDistanceKm = VALUES(RoadDistanceKm), lane_source = VALUES(lane_source)
+                    """,
+                    rows,
+                )
+        conn.commit()
+        return len(rows)
+    finally:
+        conn.close()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="MicroStar Snapshot Extraction & Optimization Pipeline")
     parser.add_argument("--horizon", type=int, default=1000, help="Earliest-due open orders horizon (default: 1000)")
-    parser.add_argument("--time-limit", type=int, default=15, help="CP-SAT solver time limit in seconds (default: 15)")
-    parser.add_argument("--source-policy", type=str, default="depot_first", choices=["depot_first", "unrestricted_nearest", "approved_peer_brewer"], help="Source eligibility policy (default: depot_first)")
+    parser.add_argument("--time-limit", type=int, default=20, help="CP-SAT solver time limit in seconds (default: 20)")
+    parser.add_argument(
+        "--source-policy",
+        type=str,
+        default="service_first_fallback",
+        choices=["service_first_fallback", "depot_first", "unrestricted_nearest", "approved_peer_brewer"],
+        help="Source eligibility policy (default: service_first_fallback)",
+    )
+    parser.add_argument(
+        "--as-of-date",
+        type=str,
+        default="2026-01-02",
+        help="Historical simulation planning as-of date YYYY-MM-DD (default: 2026-01-02; never substitutes date.today())",
+    )
+    parser.add_argument("--supplement-lanes", action="store_true", help="Populate nubrix_poc_distance_matrix for missing depot->Brewer pairs")
     parser.add_argument("--publish", action="store_true", help="Actually write run to Railway nubrix_poc_* tables (default: dry-run)")
     args = parser.parse_args()
+
+    as_of_d = datetime.strptime(args.as_of_date[:10], "%Y-%m-%d").date()
 
     print("=== MicroStar End-to-End Snapshot Publication Pipeline ===")
     if not args.publish:
@@ -55,17 +133,28 @@ def main() -> int:
     t0 = time.time()
     railway_params = get_railway_params()
 
+    if args.supplement_lanes:
+        storage = PocStorageManager(railway_params)
+        storage.init_schema()
+        added = populate_supplemental_lanes(railway_params)
+        print(f"Populated {added} derived synthetic proxy lanes into nubrix_poc_distance_matrix (FreightRoadDistance untouched).")
+
     # 1. Extract live snapshot
-    print("\n[1/5] Extracting live snapshot from Railway MySQL (read-only)...")
+    print(f"\n[1/5] Extracting snapshot from Railway MySQL (as_of={as_of_d})...")
     adapter = RailwayWarehouseAdapter(railway_params)
-    adapter_result = adapter.load_snapshot()
+    adapter_result = adapter.load_snapshot(as_of_date=as_of_d)
     snapshot = adapter_result.snapshot
+    snapshot["as_of_date"] = str(as_of_d)
+    snapshot["directed_lanes"] = True
     total_open_orders = len(snapshot["orders"])
     # Scope planning horizon to earliest-due open orders for fast, bounded CP-SAT execution
     snapshot["orders"] = snapshot["orders"][:args.horizon]
     snapshot["provenance"]["total_open_orders"] = total_open_orders
     snapshot["provenance"]["planning_horizon_orders"] = len(snapshot["orders"])
     snapshot["provenance"]["horizon_truncated"] = len(snapshot["orders"]) < total_open_orders
+    snapshot["provenance"]["is_historical_simulation"] = True
+    snapshot["provenance"]["planning_as_of"] = str(as_of_d)
+    snapshot["provenance"]["published_at"] = datetime.now(timezone.utc).isoformat()
     validation = validate_snapshot(snapshot)
     snapshot["provenance"]["validation_warnings"] = validation.warnings
     snapshot["provenance"]["validation_summary"] = validation.summary
@@ -100,7 +189,7 @@ def main() -> int:
     t_opt = time.time()
     ortools_planner = OrToolsFulfillmentPlanner(
         time_limit_seconds=args.time_limit,
-        max_candidates_per_order=12,
+        max_candidates_per_order=24,
         source_policy=args.source_policy,
     )
     ortools_result = ortools_planner.plan(snapshot)
@@ -225,12 +314,14 @@ def main() -> int:
         storage.init_schema()
         pub_summary = storage.publish_run(
             run_id=run_id,
-            as_of_date=date.today(),
+            as_of_date=as_of_d,
             plan_result=ortools_result,
             allocations=allocations,
             evidence_list=evidence_list,
             set_active=True,
         )
+        snap_hash = storage.save_snapshot(run_id, snapshot)
+        pub_summary["snapshot_hash"] = snap_hash
         print("Published:", json.dumps(pub_summary, indent=2))
     else:
         print(f"\n[4/5] DRY-RUN: Skipping publish of {run_id} ({len(allocations)} allocations, {len(evidence_list)} evidence rows).")

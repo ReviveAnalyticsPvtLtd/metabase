@@ -296,14 +296,16 @@ class RailwayWarehouseAdapter:
                         "max_load": int(max_load),
                     }
 
-                # 3. Stock / Reported Inventory (deduplicate to latest SnapshotDate per CustomerId, SizeCode)
+                # 3. Stock / Reported Inventory (deduplicate to latest SnapshotDate <= as_of_date per CustomerId, SizeCode)
                 cursor.execute("""
                     SELECT InventorySnapshotId, CustomerId, CustomerName, CustomerType,
                            Region, SizeCode, SnapshotDate, AvailableQuantity
                     FROM ReportedInventory
                 """)
+                all_inv_rows = cursor.fetchall()
                 latest_inv: Dict[Tuple[str, str], Tuple[date, int, str, str, str, str]] = {}
-                for row in cursor.fetchall():
+                inv_date_mismatch = False
+                for row in all_inv_rows:
                     inv_id, cid, name, ctype, region, sku, snap_date, qty = row
                     if isinstance(snap_date, str):
                         snap_d = datetime.strptime(snap_date[:10], "%Y-%m-%d").date()
@@ -313,10 +315,29 @@ class RailwayWarehouseAdapter:
                         snap_d = snap_date
                     else:
                         snap_d = date.min
+                    if as_of_date is not None and snap_d > as_of_date:
+                        continue
                     key = (cid, sku)
                     prev = latest_inv.get(key)
                     if prev is None or snap_d >= prev[0]:
                         latest_inv[key] = (snap_d, int(qty), name, ctype, region, inv_id)
+
+                if not latest_inv and all_inv_rows and as_of_date is not None:
+                    inv_date_mismatch = True
+                    for row in all_inv_rows:
+                        inv_id, cid, name, ctype, region, sku, snap_date, qty = row
+                        if isinstance(snap_date, str):
+                            snap_d = datetime.strptime(snap_date[:10], "%Y-%m-%d").date()
+                        elif isinstance(snap_date, datetime):
+                            snap_d = snap_date.date()
+                        elif isinstance(snap_date, date):
+                            snap_d = snap_date
+                        else:
+                            snap_d = date.min
+                        key = (cid, sku)
+                        prev = latest_inv.get(key)
+                        if prev is None or snap_d >= prev[0]:
+                            latest_inv[key] = (snap_d, int(qty), name, ctype, region, inv_id)
 
                 stock = []
                 for (cid, sku), (snap_d, qty, name, ctype, region, inv_id) in latest_inv.items():
@@ -380,13 +401,22 @@ class RailwayWarehouseAdapter:
                     "name": "SwiftHaul Logistics", "rate_paise": 210, "max_load": 900
                 }
 
+                seen_pairs = set()
+                frd_count = 0
                 for row in cursor.fetchall():
                     dist_id, orig, dest, km = row
                     km = int(km)
                     minutes = int((km / 50.0) * 60)
-
-                    legs.append({"carrier": primary_carrier["name"], "origin": orig, "destination": dest, "km": km, "minutes": minutes})
-                    legs.append({"carrier": primary_carrier["name"], "origin": dest, "destination": orig, "km": km, "minutes": minutes})
+                    seen_pairs.add((orig, dest))
+                    frd_count += 1
+                    legs.append({
+                        "carrier": primary_carrier["name"],
+                        "origin": orig,
+                        "destination": dest,
+                        "km": km,
+                        "minutes": minutes,
+                        "lane_source": "FreightRoadDistance",
+                    })
                     lanes.append({
                         "carrier": primary_carrier["name"],
                         "origin": orig,
@@ -397,7 +427,48 @@ class RailwayWarehouseAdapter:
                         "minutes": minutes,
                         "rate_paise": primary_carrier["rate_paise"],
                         "handling_minutes": 60,
+                        "lane_source": "FreightRoadDistance",
                     })
+
+                # Also load any derived synthetic proxy lanes from nubrix_poc_distance_matrix
+                # (never mutates FreightRoadDistance; only fills missing directed pairs)
+                proxy_count = 0
+                cursor.execute("""
+                    SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES
+                    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'nubrix_poc_distance_matrix'
+                """)
+                if cursor.fetchone()[0] > 0:
+                    cursor.execute("""
+                        SELECT OriginCustomerId, DestCustomerId, RoadDistanceKm, lane_source
+                        FROM nubrix_poc_distance_matrix
+                    """)
+                    for orig, dest, km, lsrc in cursor.fetchall():
+                        if (orig, dest) in seen_pairs:
+                            continue
+                        km = int(km)
+                        minutes = int((km / 50.0) * 60)
+                        seen_pairs.add((orig, dest))
+                        proxy_count += 1
+                        legs.append({
+                            "carrier": primary_carrier["name"],
+                            "origin": orig,
+                            "destination": dest,
+                            "km": km,
+                            "minutes": minutes,
+                            "lane_source": lsrc or "synthetic_haversine_proxy",
+                        })
+                        lanes.append({
+                            "carrier": primary_carrier["name"],
+                            "origin": orig,
+                            "destination": dest,
+                            "coordinator": orig,
+                            "via": None,
+                            "km": km,
+                            "minutes": minutes,
+                            "rate_paise": primary_carrier["rate_paise"],
+                            "handling_minutes": 60,
+                            "lane_source": lsrc or "synthetic_haversine_proxy",
+                        })
 
                 # 6. Vehicle fleet table is absent in the 7-table Railway schema; do not fabricate trucks
                 vehicles = []
@@ -409,6 +480,11 @@ class RailwayWarehouseAdapter:
             "Railway 7-table schema has no Truck/vehicle availability or InventoryReservation table; "
             "carrier MaxLoadKegs is enforced per allocation and distances are synthetic India road proxies."
         ]
+        if inv_date_mismatch:
+            warnings.append(
+                f"ReportedInventory SnapshotDate is later than planning as-of ({as_of_date}); "
+                "using latest synthetic inventory snapshot as simulated opening stock."
+            )
         missing_fields = ["Truck", "InventoryReservation"]
 
         provenance = {
@@ -416,10 +492,13 @@ class RailwayWarehouseAdapter:
             "host": self.params.get("host"),
             "database": self.params.get("database"),
             "timestamp": datetime.now(timezone.utc).isoformat(),
+            "as_of_date": str(as_of_date) if as_of_date else None,
             "orders_count": len(orders),
             "stock_count": len(stock),
             "customers_count": len(customers),
             "lanes_count": len(lanes),
+            "freight_road_distance_count": frd_count,
+            "supplemental_proxy_lanes_count": proxy_count,
         }
 
         snapshot = {
