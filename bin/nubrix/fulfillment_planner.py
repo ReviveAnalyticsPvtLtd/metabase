@@ -588,7 +588,7 @@ class OrToolsFulfillmentPlanner:
         freight_expr = sum(c.freight_paise * choice_vars[c.candidate_id] for c in feasible_candidates)
 
         solver = cp_model.CpSolver()
-        solver.parameters.num_search_workers = 1
+        solver.parameters.num_search_workers = 4
 
         def _solve_stage(obj_expr, maximize: bool, budget_sec: float, prev_vals: Optional[Dict[int, int]]) -> int:
             if prev_vals:
@@ -599,19 +599,18 @@ class OrToolsFulfillmentPlanner:
                 model.Maximize(obj_expr)
             else:
                 model.Minimize(obj_expr)
-            solver.parameters.max_time_in_seconds = max(0.5, budget_sec)
+            solver.parameters.max_time_in_seconds = max(1.0, budget_sec)
             return solver.Solve(model)
 
         prev_solution: Optional[Dict[int, int]] = None
-        stage1_budget = max(4.0, float(self.time_limit_seconds) * 0.45)
-        stage_budget = max(1.5, float(self.time_limit_seconds) * 0.14)
+        total_budget = max(4.0, float(self.time_limit_seconds))
         status = cp_model.OPTIMAL
         all_stages_optimal = True
         use_prev_fallback = False
 
         if feasible_candidates:
             # Stage 1: Maximize covered kegs
-            status = _solve_stage(volume_expr, True, stage1_budget, prev_solution)
+            status = _solve_stage(volume_expr, True, total_budget * 0.25, prev_solution)
             if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
                 raise InvariantValidationError(
                     f"CP-SAT solver failed closed at Stage 1 with status {solver.StatusName(status)} (status_code={status})"
@@ -623,7 +622,7 @@ class OrToolsFulfillmentPlanner:
             model.Add(volume_expr >= opt_vol)
 
             # Stage 2: Maximize earliest-due urgency
-            status2 = _solve_stage(urgency_expr, True, stage_budget * 0.6, prev_solution)
+            status2 = _solve_stage(urgency_expr, True, total_budget * 0.15, prev_solution)
             if status2 in (cp_model.OPTIMAL, cp_model.FEASIBLE):
                 if status2 != cp_model.OPTIMAL:
                     all_stages_optimal = False
@@ -633,39 +632,28 @@ class OrToolsFulfillmentPlanner:
             else:
                 all_stages_optimal = False
 
-            # Stage 3: Minimize Brewer-source kegs (fallback tier)
-            if source_policy in ("service_first_fallback", "approved_peer_brewer"):
-                status3 = _solve_stage(brewer_expr, False, stage_budget * 0.6, prev_solution)
+            # Stage 3: Minimize Brewer-source kegs, then Distributor-source kegs (preferring Maintenance Facility)
+            if source_policy in ("service_first_fallback", "approved_peer_brewer", "depot_first"):
+                max_total_kegs = sum(int(o["pending"]) for o in orders) + 1
+                role_expr = (brewer_expr * (max_total_kegs if source_policy in ("service_first_fallback", "approved_peer_brewer") else 0)) + dist_expr
+                status3 = _solve_stage(role_expr, False, total_budget * 0.25, prev_solution)
                 if status3 in (cp_model.OPTIMAL, cp_model.FEASIBLE):
                     if status3 != cp_model.OPTIMAL:
                         all_stages_optimal = False
-                    opt_brewer = int(round(solver.ObjectiveValue()))
+                    opt_role = int(round(solver.ObjectiveValue()))
                     prev_solution = {c.candidate_id: solver.Value(choice_vars[c.candidate_id]) for c in feasible_candidates}
-                    model.Add(brewer_expr <= opt_brewer)
+                    model.Add(role_expr <= opt_role)
                 else:
                     all_stages_optimal = False
 
-            # Stage 4: Minimize Distributor-source kegs (prefer Maintenance Facility)
-            if source_policy in ("service_first_fallback", "depot_first", "approved_peer_brewer"):
-                status4 = _solve_stage(dist_expr, False, stage_budget * 0.6, prev_solution)
-                if status4 in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-                    if status4 != cp_model.OPTIMAL:
-                        all_stages_optimal = False
-                    opt_dist = int(round(solver.ObjectiveValue()))
-                    prev_solution = {c.candidate_id: solver.Value(choice_vars[c.candidate_id]) for c in feasible_candidates}
-                    model.Add(dist_expr <= opt_dist)
-                else:
-                    all_stages_optimal = False
-
-            # Stage 5: Minimize modeled freight
-            stage5_budget = max(4.0, float(self.time_limit_seconds) * 0.40)
-            status5 = _solve_stage(freight_expr, False, stage5_budget, prev_solution)
+            # Stage 4: Minimize modeled freight
+            status5 = _solve_stage(freight_expr, False, total_budget * 0.35, prev_solution)
             if status5 in (cp_model.OPTIMAL, cp_model.FEASIBLE):
                 status = status5
                 if status5 != cp_model.OPTIMAL:
                     all_stages_optimal = False
             else:
-                # Preserve validated Stage 1-4 feasible solution if Stage 5 freight polishing hits time limit
+                # Preserve validated Stage 1-3 feasible solution if freight polishing hits time limit
                 status = cp_model.FEASIBLE
                 all_stages_optimal = False
                 use_prev_fallback = True
