@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from ortools.sat.python import cp_model
 
 from domain_contract import (
+    MAX_TRUCK_CAPACITY_KEGS,
     PAISE_PER_INR,
     SPEED_KM_PER_DAY,
     calculate_freight_cost_inr,
@@ -38,6 +39,7 @@ class CandidateOption:
     destination_customer_id: str
     destination_name: str
     sku: str
+    keg_condition: str
     quantity: int
     distance_km: int
     transit_days: int
@@ -162,10 +164,12 @@ class OrToolsFulfillmentPlanner:
         time_limit_seconds: int = 15,
         max_candidates_per_order: int = 20,
         source_policy: str = "depot_first",
+        default_truck_capacity: int = MAX_TRUCK_CAPACITY_KEGS,
     ):
         self.time_limit_seconds = time_limit_seconds
         self.max_candidates_per_order = max_candidates_per_order
         self.source_policy = source_policy
+        self.default_truck_capacity = int(default_truck_capacity)
 
     def plan(self, snapshot: Dict[str, Any]) -> Dict[str, Any]:
         """Execute complete optimization workflow with candidate generation, CP-SAT solve, and validation."""
@@ -177,8 +181,13 @@ class OrToolsFulfillmentPlanner:
 
         # Build lookup tables
         stock_by_source_sku = defaultdict(int)
+        stock_condition_by_source_sku = defaultdict(set)
+        stock_by_source_sku_condition = defaultdict(int)
         for s in stock_list:
-            stock_by_source_sku[(s["source"], s["sku"])] = s["available"]
+            condition = str(s.get("keg_condition", s.get("condition", "empty"))).strip().lower() or "empty"
+            stock_by_source_sku[(s["source"], s["sku"])] += int(s["available"])
+            stock_condition_by_source_sku[(s["source"], s["sku"])].add(condition)
+            stock_by_source_sku_condition[(s["source"], s["sku"], condition)] += int(s["available"])
 
         # Build distance map (orig, dest) -> km
         distance_map = {}
@@ -231,6 +240,7 @@ class OrToolsFulfillmentPlanner:
             oid = order["id"]
             dest_id = order["customer_id"]
             sku = order["sku"]
+            keg_condition = str(order.get("keg_condition", order.get("condition", "empty"))).strip().lower() or "empty"
             pending_qty = order["pending"]
             needed_by_str = order.get("needed_by_date")
             ordered_str = order.get("ordered_date")
@@ -259,9 +269,12 @@ class OrToolsFulfillmentPlanner:
 
             # Identify candidate sources holding this SKU and enforce source eligibility policy
             all_stock_sources = [
-                (src_id, avail)
+                (src_id, stock_by_source_sku_condition[(src_id, s_sku, keg_condition)])
                 for (src_id, s_sku), avail in stock_by_source_sku.items()
-                if s_sku == sku and avail > 0 and src_id != dest_id
+                if s_sku == sku
+                and keg_condition in stock_condition_by_source_sku[(src_id, s_sku)]
+                and stock_by_source_sku_condition[(src_id, s_sku, keg_condition)] > 0
+                and src_id != dest_id
             ]
 
             if not all_stock_sources:
@@ -400,8 +413,8 @@ class OrToolsFulfillmentPlanner:
 
             # Available carriers (Pareto-prune strictly dominated carriers when vehicles are not modeled)
             raw_carriers = list(carriers.values()) if carriers else [
-                {"id": "CAR-01", "name": "SwiftHaul Logistics", "rate_inr": 2.10, "rate_paise": 210, "max_load": 900},
-                {"id": "CAR-02", "name": "Deccan Freight", "rate_inr": 1.85, "rate_paise": 185, "max_load": 700},
+                {"id": "CAR-01", "name": "SwiftHaul Logistics", "rate_inr": 2.10, "rate_paise": 210, "max_load": self.default_truck_capacity},
+                {"id": "CAR-02", "name": "Deccan Freight", "rate_inr": 1.85, "rate_paise": 185, "max_load": self.default_truck_capacity},
             ]
             forced_for_order = (snapshot.get("forced_assignment") or {}).get(oid)
 
@@ -443,7 +456,13 @@ class OrToolsFulfillmentPlanner:
                             "details": f"Carrier {car_name} has non-positive capacity ({max_load})",
                         })
                         continue
-                    rate_inr = float(car.get("rate_inr", 2.0))
+                    rate_by_region = car.get("rate_by_region") or snapshot.get("carrier_rates_by_region", {})
+                    regional_rates = rate_by_region.get(dest_region, {}) if isinstance(rate_by_region, dict) else {}
+                    rate_inr = float(
+                        regional_rates.get(car_name, car.get("rate_inr", 2.0))
+                        if isinstance(regional_rates, dict)
+                        else car.get("rate_inr", 2.0)
+                    )
 
                     # If vehicles are provided, enforce vehicle availability & capacity per vehicle
                     matching_vehicles = [
@@ -492,6 +511,7 @@ class OrToolsFulfillmentPlanner:
                             destination_customer_id=dest_id,
                             destination_name=dest_name,
                             sku=sku,
+                            keg_condition=keg_condition,
                             quantity=alloc_qty,
                             distance_km=km,
                             transit_days=transit_days,

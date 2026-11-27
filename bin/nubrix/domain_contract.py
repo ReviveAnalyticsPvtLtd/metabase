@@ -13,7 +13,9 @@ from typing import Any, Dict, List, Optional, Protocol, Set, Tuple, runtime_chec
 # Business Constants & Policies
 SPEED_KM_PER_DAY: float = 400.0  # Commercial road freight transit SLA proxy across India
 PAISE_PER_INR: int = 100
-MAX_TRUCK_CAPACITY_KEGS: int = 300  # Standard multi-stop route capacity cap
+# Carrier-confirmed planning default. Individual carrier records may override this
+# when a lane or vehicle class has a different legal/load limit.
+MAX_TRUCK_CAPACITY_KEGS: int = 544
 MIN_LATITUDE: float = 6.0   # India bounding box
 MAX_LATITUDE: float = 38.0
 MIN_LONGITUDE: float = 68.0
@@ -22,6 +24,7 @@ MAX_LONGITUDE: float = 98.0
 CUSTOMER_TYPES: Set[str] = {"Brewer", "Distributor", "Maintenance Facility"}
 REGIONS: Set[str] = {"North", "South", "East", "West"}
 KEG_SIZES: Set[str] = {"20L", "30L", "50L"}
+KEG_CONDITIONS: Set[str] = {"filled", "empty"}
 ORDER_STATUSES: Set[str] = {"Unfulfilled", "Partially Fulfilled", "Fulfilled"}
 ALLOCATION_STATUSES: Set[str] = {"Feasible", "Infeasible", "Awaiting Approval", "In Transit", "Delivered"}
 

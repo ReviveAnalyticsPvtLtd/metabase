@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Set, Tuple
 
 
 VALID_ROLES = {"Brewer", "Distributor", "Maintenance Facility"}
+VALID_KEG_CONDITIONS = {"filled", "empty"}
 
 
 @dataclass
@@ -97,6 +98,9 @@ def validate_snapshot(snapshot: Dict[str, Any]) -> SnapshotValidationResult:
         q_ord = int(o.get("quantity_ordered", 0) or 0)
         q_ful = int(o.get("fulfilled_units", 0) or 0)
         q_pend = int(o.get("pending", 0) or 0)
+        condition = str(o.get("keg_condition", o.get("condition", "empty"))).strip().lower() or "empty"
+        if condition not in VALID_KEG_CONDITIONS:
+            errors.append(f"Order {oid} has invalid keg condition {condition!r}")
         if q_ord <= 0 or q_pend < 0 or q_ful < 0 or (q_ord != q_ful + q_pend):
             reconciliation_errors += 1
             errors.append(
@@ -127,6 +131,9 @@ def validate_snapshot(snapshot: Dict[str, Any]) -> SnapshotValidationResult:
         seen_stock_keys.add((src, sku))
         if not s.get("as_of_date"):
             missing_stock_date += 1
+        condition = str(s.get("keg_condition", s.get("condition", "empty"))).strip().lower() or "empty"
+        if condition not in VALID_KEG_CONDITIONS:
+            errors.append(f"Stock row ({src}, {sku}) has invalid keg condition {condition!r}")
 
     if dup_stock_keys > 0:
         errors.append(f"Duplicate stock rows after deduplication: {dup_stock_keys}")
@@ -141,6 +148,11 @@ def validate_snapshot(snapshot: Dict[str, Any]) -> SnapshotValidationResult:
             errors.append(f"Carrier {cid} has non-positive rate {rate}")
         if max_load <= 0:
             errors.append(f"Carrier {cid} has non-positive max_load {max_load}")
+        if max_load > 544:
+            warnings.append(f"Carrier {cid} capacity {max_load} exceeds the standard 544-keg planning default.")
+        regional_rates = car.get("rate_by_region") or {}
+        if regional_rates and any(float(value or 0) <= 0 for value in regional_rates.values()):
+            errors.append(f"Carrier {cid} has a non-positive regional freight rate")
 
     # 5. Lane distance conflicts
     seen_lanes: Dict[Tuple[str, str], int] = {}

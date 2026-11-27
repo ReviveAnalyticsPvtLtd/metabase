@@ -111,9 +111,9 @@ def main() -> int:
     parser.add_argument(
         "--source-policy",
         type=str,
-        default="service_first_fallback",
-        choices=["service_first_fallback", "depot_first", "unrestricted_nearest", "approved_peer_brewer"],
-        help="Source eligibility policy (default: service_first_fallback)",
+        default="cost_service_optimal",
+        choices=["cost_service_optimal", "service_first_fallback", "depot_first", "unrestricted_nearest", "approved_peer_brewer"],
+        help="Source eligibility policy (default: cost_service_optimal)",
     )
     parser.add_argument(
         "--as-of-date",
@@ -127,6 +127,12 @@ def main() -> int:
         type=int,
         default=220,
         help="Synthetic max truck dispatches per carrier across horizon (0 = uncapped, default: 220)",
+    )
+    parser.add_argument(
+        "--default-truck-capacity",
+        type=int,
+        default=544,
+        help="Default carrier truck capacity in kegs when a carrier record does not specify one.",
     )
     parser.add_argument(
         "--no-consolidate-trips",
@@ -172,6 +178,8 @@ def main() -> int:
     snapshot["provenance"]["horizon_truncated"] = len(snapshot["orders"]) < total_open_orders
     snapshot["provenance"]["is_historical_simulation"] = True
     snapshot["provenance"]["planning_as_of"] = str(as_of_d)
+    snapshot["default_truck_capacity"] = args.default_truck_capacity
+    snapshot["provenance"]["default_truck_capacity_kegs"] = args.default_truck_capacity
     snapshot["provenance"]["published_at"] = datetime.now(timezone.utc).isoformat()
     validation = validate_snapshot(snapshot)
     snapshot["provenance"]["validation_warnings"] = validation.warnings
@@ -209,6 +217,7 @@ def main() -> int:
         time_limit_seconds=args.time_limit,
         max_candidates_per_order=24,
         source_policy=args.source_policy,
+        default_truck_capacity=args.default_truck_capacity,
     )
     ortools_result = ortools_planner.plan(snapshot)
     snapshot["provenance"]["planning_mode"] = ortools_result.get("planning_mode")
@@ -276,6 +285,7 @@ def main() -> int:
             "omitted_candidates_count": outcome.omitted_candidates_count,
             "trip_id": outcome.trip_id,
             "stop_sequence": outcome.stop_sequence,
+            "allocation_lines": outcome.allocation_lines,
         })
 
         missing_lane_seen = False

@@ -293,7 +293,7 @@ class RailwayWarehouseAdapter:
                         "name": name,
                         "rate_inr": float(rate),
                         "rate_paise": int(round(float(rate) * PAISE_PER_INR)),
-                        "max_load": int(max_load),
+                        "max_load": int(max_load or 544),
                     }
 
                 # 3. Stock / Reported Inventory (deduplicate to latest SnapshotDate <= as_of_date per CustomerId, SizeCode)
@@ -345,6 +345,7 @@ class RailwayWarehouseAdapter:
                         stock.append({
                             "source": cid,
                             "sku": sku,
+                            "keg_condition": "empty",
                             "available": qty,
                             "customer_name": name,
                             "customer_type": ctype,
@@ -377,6 +378,7 @@ class RailwayWarehouseAdapter:
                         "id": oid,
                         "customer_id": cid,
                         "sku": sku,
+                        "keg_condition": "empty",
                         "destination": cid,
                         "released": rel_ordered,
                         "due": rel_due,
