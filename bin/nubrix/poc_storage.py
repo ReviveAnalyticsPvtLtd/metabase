@@ -163,6 +163,26 @@ CREATE_TABLES_SQL = [
         KEY `idx_stops_trip` (`trip_id`, `stop_sequence`)
     ) ENGINE=InnoDB;
     """,
+    """
+    CREATE TABLE IF NOT EXISTS `nubrix_poc_allocation_lines` (
+        `line_id` VARCHAR(80) PRIMARY KEY,
+        `run_id` VARCHAR(64) NOT NULL,
+        `order_id` VARCHAR(64) NOT NULL,
+        `line_seq` INT NOT NULL,
+        `source_customer_id` VARCHAR(64) NOT NULL,
+        `source_name` VARCHAR(255) NOT NULL,
+        `source_role` VARCHAR(64) NOT NULL,
+        `carrier_id` VARCHAR(64) NULL,
+        `carrier` VARCHAR(100) NOT NULL,
+        `allocated_units` INT NOT NULL,
+        `distance_km` INT NOT NULL,
+        `freight_cost_inr` DECIMAL(12,2) NOT NULL,
+        `transit_days` INT NOT NULL,
+        `trip_code` VARCHAR(32) NULL,
+        `stop_sequence` INT NULL,
+        KEY `idx_lines_run_order` (`run_id`, `order_id`)
+    ) ENGINE=InnoDB;
+    """,
 ]
 
 
@@ -201,6 +221,7 @@ class PocStorageManager:
             ("nubrix_poc_allocations", "omitted_candidates_count", "INT DEFAULT 0"),
             ("nubrix_poc_allocations", "trip_id", "VARCHAR(64) NULL"),
             ("nubrix_poc_allocations", "stop_sequence", "INT NULL"),
+            ("nubrix_poc_trip_stops", "line_id", "VARCHAR(80) NULL"),
             ("nubrix_poc_candidate_evidence", "source_name", "VARCHAR(255) NULL"),
             ("nubrix_poc_candidate_evidence", "distributor_customer_id", "VARCHAR(64) NULL"),
             ("nubrix_poc_candidate_evidence", "distributor_name", "VARCHAR(255) NULL"),
@@ -264,8 +285,20 @@ class PocStorageManager:
                 raise ValueError(f"Overallocated: {alloc}")
             if alloc["distance_km"] < 0:
                 raise ValueError(f"Negative distance: {alloc}")
+            expected_pending = max(0, int(alloc["ordered_units"]) - int(alloc["fulfilled_units"]))
+            if int(alloc["pending_units"]) != expected_pending:
+                raise ValueError(f"Pending quantity mismatch for {alloc['order_id']}: {alloc['pending_units']} != {expected_pending}")
+            lines = alloc.get("allocation_lines") or []
+            if lines and sum(int(line["allocated_units"]) for line in lines) != int(alloc["allocated_units"]):
+                raise ValueError(f"Shipment lines do not reconcile for {alloc['order_id']}")
+            expected_status = (
+                "Fully covered" if int(alloc["allocated_units"]) == int(alloc["pending_units"])
+                else ("Partially covered" if int(alloc["allocated_units"]) > 0 else "No allocation")
+            )
+            if alloc["planning_status"] != expected_status:
+                raise ValueError(f"Coverage status mismatch for {alloc['order_id']}")
 
-        total_ordered = sum(a["ordered_units"] for a in allocations)
+        total_ordered = sum(a["pending_units"] for a in allocations)
         total_allocated = sum(a["allocated_units"] for a in allocations)
         total_freight = sum(float(a["freight_cost_inr"]) for a in allocations)
         fully_covered = sum(1 for a in allocations if a["planning_status"] == "Fully covered")
@@ -358,13 +391,14 @@ class PocStorageManager:
                             t["stop_count"], t["total_distance_km"], t["total_freight_inr"], t["dispatch_date"],
                         ))
                         for st in t["stops"]:
+                            line_seq_id = st.get("line_id") or f"{st['order_id']}#S1"
                             stop_id = f"{full_tid}-S{st['stop_sequence']:02d}"
                             stop_rows.append((
                                 stop_id, full_tid, run_id, t["trip_code"], st["stop_sequence"], st["order_id"],
                                 st["destination_customer_id"], st["destination_name"], st["keg_size"], st["kegs_delivered"],
                                 st["load_before_stop_kegs"], st["load_after_stop_kegs"], st["leg_from_id"], st["leg_from_name"],
                                 st["leg_distance_km"], st["cumulative_distance_km"], st["cumulative_transit_days"],
-                                st["needed_by"], st["on_time_feasible"], st["allocated_freight_inr"],
+                                st["needed_by"], st["on_time_feasible"], st["allocated_freight_inr"], line_seq_id,
                             ))
                     cursor.executemany(trip_sql, trip_rows)
                     stop_sql = """
@@ -373,10 +407,41 @@ class PocStorageManager:
                             destination_customer_id, destination_name, keg_size, kegs_delivered,
                             load_before_stop_kegs, load_after_stop_kegs, leg_from_id, leg_from_name,
                             leg_distance_km, cumulative_distance_km, cumulative_transit_days,
-                            needed_by, on_time_feasible, allocated_freight_inr
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            needed_by, on_time_feasible, allocated_freight_inr, line_id
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """
                     cursor.executemany(stop_sql, stop_rows)
+
+                # Insert split/shipment allocation lines
+                line_rows = []
+                for a in allocations:
+                    for ln in (a.get("allocation_lines") or []):
+                        line_rows.append((
+                            f"{run_id}-{ln['line_id']}",
+                            run_id,
+                            a["order_id"],
+                            ln["line_seq"],
+                            ln["source_customer_id"],
+                            ln["source_name"],
+                            ln["source_role"],
+                            ln.get("carrier_id"),
+                            ln["carrier"],
+                            ln["allocated_units"],
+                            ln["distance_km"],
+                            ln["freight_cost_inr"],
+                            ln["transit_days"],
+                            ln.get("trip_code"),
+                            ln.get("stop_sequence"),
+                        ))
+                if line_rows:
+                    line_sql = """
+                        INSERT INTO nubrix_poc_allocation_lines (
+                            line_id, run_id, order_id, line_seq, source_customer_id, source_name,
+                            source_role, carrier_id, carrier, allocated_units, distance_km,
+                            freight_cost_inr, transit_days, trip_code, stop_sequence
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """
+                    cursor.executemany(line_sql, line_rows)
 
                 # Insert Evidence if provided
                 if evidence_list:

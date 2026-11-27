@@ -59,6 +59,7 @@ class CandidateOption:
     omitted_reason: Optional[str] = None
     trip_id: Optional[str] = None
     stop_sequence: Optional[int] = None
+    allocation_lines: List[Dict[str, Any]] = field(default_factory=list)
     route_legs: List[Tuple[str, str, int]] = field(default_factory=list)
 
 
@@ -100,6 +101,7 @@ class PlannerOutcome:
     omitted_reason: Optional[str] = None
     trip_id: Optional[str] = None
     stop_sequence: Optional[int] = None
+    allocation_lines: List[Dict[str, Any]] = field(default_factory=list)
 
 
 class InvariantValidationError(Exception):
@@ -194,6 +196,7 @@ class OrToolsFulfillmentPlanner:
         handling_days = int(snapshot.get("distributor_handling_days", 0) or 0)
         source_policy = str(snapshot.get("source_policy", self.source_policy) or "depot_first")
         vehicles = list(snapshot.get("vehicles") or [])
+        allow_order_splits = bool(snapshot.get("allow_order_splits", source_policy == "cost_service_optimal")) and not vehicles
         consolidate_trips = bool(snapshot.get("consolidate_trips", False))
         carrier_truck_limits = dict(snapshot.get("carrier_truck_limits") or {})
         # When consolidating multi-order trips in Phase 2, Phase 1 focuses on source selection and
@@ -356,10 +359,10 @@ class OrToolsFulfillmentPlanner:
             def _source_sort_key(item: Tuple[str, int, int, List[Tuple[str, str, int]]]) -> Tuple[int, int]:
                 s_id, _, s_km, _ = item
                 s_type = customers.get(s_id, {}).get("type", "")
+                tier = 0 if s_type == "Maintenance Facility" else (1 if s_type == "Distributor" else 2)
                 if source_policy in ("depot_first", "approved_peer_brewer", "service_first_fallback"):
-                    tier = 0 if s_type == "Maintenance Facility" else (1 if s_type == "Distributor" else 2)
                     return (tier, s_km)
-                return (0, s_km)
+                return (s_km, tier)
 
             sources_with_dist.sort(key=_source_sort_key)
             if source_policy == "service_first_fallback":
@@ -371,6 +374,21 @@ class OrToolsFulfillmentPlanner:
                     if tier_counts[t] < per_tier:
                         selected_sources_for_order.append(item)
                         tier_counts[t] += 1
+                omitted_count = max(0, len(sources_with_dist) - len(selected_sources_for_order))
+            elif source_policy == "cost_service_optimal":
+                # Keep nearest sources regardless of role + ensure nearest Maint & Dist options are included
+                nearest_all = sources_with_dist[:max(16, self.max_candidates_per_order - 6)]
+                chosen_ids = {item[0] for item in nearest_all}
+                selected_sources_for_order = list(nearest_all)
+                for target_type in ("Maintenance Facility", "Distributor"):
+                    added = 0
+                    for item in sources_with_dist:
+                        if added >= 3:
+                            break
+                        if customers.get(item[0], {}).get("type") == target_type and item[0] not in chosen_ids:
+                            selected_sources_for_order.append(item)
+                            chosen_ids.add(item[0])
+                            added += 1
                 omitted_count = max(0, len(sources_with_dist) - len(selected_sources_for_order))
             else:
                 selected_sources_for_order = sources_with_dist[:self.max_candidates_per_order]
@@ -521,14 +539,20 @@ class OrToolsFulfillmentPlanner:
                             "route_legs": r_legs,
                         })
 
-        # 2. CP-SAT Integer Programming Optimization (Stage 1: pure BoolVar over feasible candidates)
+        # 2. CP-SAT Integer Programming Optimization
         feasible_candidates = [c for c in all_candidates if c.is_feasible]
         model = cp_model.CpModel()
         choice_vars = {}
+        qty_vars = {}
         vehicle_intervals = defaultdict(list)
         for c in feasible_candidates:
             bvar = model.NewBoolVar(f"cand_{c.candidate_id}")
             choice_vars[c.candidate_id] = bvar
+            if allow_order_splits:
+                qvar = model.NewIntVar(0, c.quantity, f"qty_{c.candidate_id}")
+                qty_vars[c.candidate_id] = qvar
+                model.Add(qvar >= bvar)
+                model.Add(qvar <= c.quantity * bvar)
             if c.vehicle_id is not None and c.trip_end > c.trip_start:
                 vehicle_intervals[c.vehicle_id].append(
                     model.NewOptionalFixedSizeIntervalVar(
@@ -536,8 +560,9 @@ class OrToolsFulfillmentPlanner:
                     )
                 )
 
-        # Constraint 1: At most one primary fulfillment candidate per order (and honor forced_assignment if provided)
+        # Constraint 1: Order fulfillment bounds (single-source or bounded multi-source integer splits)
         forced_assignment = snapshot.get("forced_assignment") or {}
+        pending_by_order = {o["id"]: int(o["pending"]) for o in orders}
         for oid, c_list in candidates_by_order.items():
             feas_list = [c for c in c_list if c.is_feasible]
             if oid in forced_assignment:
@@ -556,8 +581,16 @@ class OrToolsFulfillmentPlanner:
                 for c in feas_list:
                     if c not in matching:
                         model.Add(choice_vars[c.candidate_id] == 0)
+                    elif allow_order_splits:
+                        f_qty = fa.get("quantity")
+                        target_q = min(c.quantity, int(f_qty)) if f_qty is not None else c.quantity
+                        model.Add(qty_vars[c.candidate_id] == target_q)
             elif feas_list:
-                model.Add(sum(choice_vars[c.candidate_id] for c in feas_list) <= 1)
+                if allow_order_splits:
+                    model.Add(sum(qty_vars[c.candidate_id] for c in feas_list) <= pending_by_order[oid])
+                    model.Add(sum(choice_vars[c.candidate_id] for c in feas_list) <= 3)
+                else:
+                    model.Add(sum(choice_vars[c.candidate_id] for c in feas_list) <= 1)
         for oid, fa in forced_assignment.items():
             if not any(c.is_feasible for c in candidates_by_order.get(oid, [])):
                 raise InvariantValidationError(
@@ -567,7 +600,8 @@ class OrToolsFulfillmentPlanner:
         # Constraint 2: Source stock capacity conservation
         stock_consumption = defaultdict(list)
         for c in feasible_candidates:
-            stock_consumption[(c.source_customer_id, c.sku)].append(c.quantity * choice_vars[c.candidate_id])
+            term = qty_vars[c.candidate_id] if allow_order_splits else (c.quantity * choice_vars[c.candidate_id])
+            stock_consumption[(c.source_customer_id, c.sku)].append(term)
 
         for (src_id, sku), uses in stock_consumption.items():
             max_avail = stock_by_source_sku.get((src_id, sku), 0)
@@ -586,34 +620,45 @@ class OrToolsFulfillmentPlanner:
                 if car_name in carrier_dispatches and max_trucks is not None:
                     model.Add(sum(carrier_dispatches[car_name]) <= int(max_trucks))
 
-        # True Staged Lexicographic Optimization:
-        # Stage 1: Maximize total feasible, on-time covered kegs
-        # Stage 2: Maximize earliest-due urgency
-        # Stage 3: Minimize Brewer-source kegs (for service_first_fallback / approved_peer_brewer)
-        # Stage 4: Minimize Distributor-source kegs (preferring Maintenance Facility)
-        # Stage 5: Minimize total modeled freight (paise)
-        volume_expr = sum(c.quantity * choice_vars[c.candidate_id] for c in feasible_candidates)
-        urgency_expr = sum(order_urgency.get(c.order_id, 1) * choice_vars[c.candidate_id] for c in feasible_candidates)
-        brewer_expr = sum(
-            c.quantity * choice_vars[c.candidate_id]
-            for c in feasible_candidates
-            if customers.get(c.source_customer_id, {}).get("type") == "Brewer"
-        )
-        dist_expr = sum(
-            c.quantity * choice_vars[c.candidate_id]
-            for c in feasible_candidates
-            if customers.get(c.source_customer_id, {}).get("type") == "Distributor"
-        )
-        freight_expr = sum(c.freight_paise * choice_vars[c.candidate_id] for c in feasible_candidates)
+        # True Staged Optimization
+        if allow_order_splits:
+            volume_expr = sum(qty_vars[c.candidate_id] for c in feasible_candidates)
+            urgency_expr = sum(order_urgency.get(c.order_id, 1) * qty_vars[c.candidate_id] for c in feasible_candidates)
+            # Cost minimization + mild ₹500/split dispatch friction + soft role preference (0 / 5 / 15 paise per keg)
+            cost_terms = []
+            for c in feasible_candidates:
+                s_type = customers.get(c.source_customer_id, {}).get("type", "")
+                role_paise = 0 if s_type == "Maintenance Facility" else (5 if s_type == "Distributor" else 15)
+                unit_paise = int(round(c.distance_km * c.cost_per_keg_km * PAISE_PER_INR)) + role_paise
+                cost_terms.append(unit_paise * qty_vars[c.candidate_id] + 50_000 * choice_vars[c.candidate_id])
+            freight_expr = sum(cost_terms)
+            brewer_expr = 0
+            dist_expr = 0
+        else:
+            volume_expr = sum(c.quantity * choice_vars[c.candidate_id] for c in feasible_candidates)
+            urgency_expr = sum(order_urgency.get(c.order_id, 1) * choice_vars[c.candidate_id] for c in feasible_candidates)
+            brewer_expr = sum(
+                c.quantity * choice_vars[c.candidate_id]
+                for c in feasible_candidates
+                if customers.get(c.source_customer_id, {}).get("type") == "Brewer"
+            )
+            dist_expr = sum(
+                c.quantity * choice_vars[c.candidate_id]
+                for c in feasible_candidates
+                if customers.get(c.source_customer_id, {}).get("type") == "Distributor"
+            )
+            freight_expr = sum(c.freight_paise * choice_vars[c.candidate_id] for c in feasible_candidates)
 
         solver = cp_model.CpSolver()
         solver.parameters.num_search_workers = 4
 
-        def _solve_stage(obj_expr, maximize: bool, budget_sec: float, prev_vals: Optional[Dict[int, int]]) -> int:
+        def _solve_stage(obj_expr, maximize: bool, budget_sec: float, prev_vals: Optional[Dict[str, Dict[int, int]]]) -> int:
             if prev_vals:
                 model.ClearHints()
-                for cid_var, val in prev_vals.items():
+                for cid_var, val in prev_vals.get("b", {}).items():
                     model.AddHint(choice_vars[cid_var], val)
+                for cid_var, val in prev_vals.get("q", {}).items():
+                    model.AddHint(qty_vars[cid_var], val)
             if maximize:
                 model.Maximize(obj_expr)
             else:
@@ -621,7 +666,13 @@ class OrToolsFulfillmentPlanner:
             solver.parameters.max_time_in_seconds = max(1.0, budget_sec)
             return solver.Solve(model)
 
-        prev_solution: Optional[Dict[int, int]] = None
+        def _capture_solution() -> Dict[str, Dict[int, int]]:
+            out = {"b": {c.candidate_id: solver.Value(choice_vars[c.candidate_id]) for c in feasible_candidates}, "q": {}}
+            if allow_order_splits:
+                out["q"] = {c.candidate_id: solver.Value(qty_vars[c.candidate_id]) for c in feasible_candidates}
+            return out
+
+        prev_solution: Optional[Dict[str, Dict[int, int]]] = None
         total_budget = max(4.0, float(self.time_limit_seconds))
         status = cp_model.OPTIMAL
         all_stages_optimal = True
@@ -637,7 +688,7 @@ class OrToolsFulfillmentPlanner:
             if status != cp_model.OPTIMAL:
                 all_stages_optimal = False
             opt_vol = int(round(solver.ObjectiveValue()))
-            prev_solution = {c.candidate_id: solver.Value(choice_vars[c.candidate_id]) for c in feasible_candidates}
+            prev_solution = _capture_solution()
             model.Add(volume_expr >= opt_vol)
 
             # Stage 2: Maximize earliest-due urgency
@@ -646,13 +697,13 @@ class OrToolsFulfillmentPlanner:
                 if status2 != cp_model.OPTIMAL:
                     all_stages_optimal = False
                 opt_urg = int(round(solver.ObjectiveValue()))
-                prev_solution = {c.candidate_id: solver.Value(choice_vars[c.candidate_id]) for c in feasible_candidates}
+                prev_solution = _capture_solution()
                 model.Add(urgency_expr >= opt_urg)
             else:
                 all_stages_optimal = False
 
-            # Stage 3: Minimize Brewer-source kegs, then Distributor-source kegs (preferring Maintenance Facility)
-            if source_policy in ("service_first_fallback", "approved_peer_brewer", "depot_first"):
+            # Stage 3: Strict role hierarchy only when explicitly requested
+            if not allow_order_splits and source_policy in ("service_first_fallback", "approved_peer_brewer", "depot_first"):
                 max_total_kegs = sum(int(o["pending"]) for o in orders) + 1
                 role_expr = (brewer_expr * (max_total_kegs if source_policy in ("service_first_fallback", "approved_peer_brewer") else 0)) + dist_expr
                 status3 = _solve_stage(role_expr, False, total_budget * 0.25, prev_solution)
@@ -660,19 +711,18 @@ class OrToolsFulfillmentPlanner:
                     if status3 != cp_model.OPTIMAL:
                         all_stages_optimal = False
                     opt_role = int(round(solver.ObjectiveValue()))
-                    prev_solution = {c.candidate_id: solver.Value(choice_vars[c.candidate_id]) for c in feasible_candidates}
+                    prev_solution = _capture_solution()
                     model.Add(role_expr <= opt_role)
                 else:
                     all_stages_optimal = False
 
-            # Stage 4: Minimize modeled freight
-            status5 = _solve_stage(freight_expr, False, total_budget * 0.35, prev_solution)
+            # Stage 4: Minimize modeled freight (+ dispatch count & role tie-break if splits enabled)
+            status5 = _solve_stage(freight_expr, False, total_budget * 0.50 if allow_order_splits else total_budget * 0.35, prev_solution)
             if status5 in (cp_model.OPTIMAL, cp_model.FEASIBLE):
                 status = status5
                 if status5 != cp_model.OPTIMAL:
                     all_stages_optimal = False
             else:
-                # Preserve validated Stage 1-3 feasible solution if freight polishing hits time limit
                 status = cp_model.FEASIBLE
                 all_stages_optimal = False
                 use_prev_fallback = True
@@ -680,63 +730,89 @@ class OrToolsFulfillmentPlanner:
         raw_solver_status = solver.StatusName(status) if feasible_candidates else "OPTIMAL"
 
         # 3. Build Outcomes & Residual Partial-Allocation Pass
-        selected_candidates: Dict[str, Tuple[CandidateOption, int]] = {}
+        selected_splits: Dict[str, List[Tuple[CandidateOption, int]]] = defaultdict(list)
         selected_stage_by_order: Dict[str, str] = {}
         allocations_by_source_sku: Dict[Tuple[str, str], List[Tuple[str, int]]] = defaultdict(list)
         remaining_stock = dict(stock_by_source_sku)
         used_vehicle_intervals: Dict[str, List[Tuple[int, int]]] = defaultdict(list)
         if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
             for c in feasible_candidates:
-                val = (
-                    prev_solution.get(c.candidate_id, 0)
-                    if use_prev_fallback and prev_solution is not None
-                    else solver.Value(choice_vars[c.candidate_id])
-                )
-                if val == 1:
-                    selected_candidates[c.order_id] = (c, c.quantity)
+                if allow_order_splits:
+                    q_val = (
+                        prev_solution["q"].get(c.candidate_id, 0)
+                        if use_prev_fallback and prev_solution is not None
+                        else solver.Value(qty_vars[c.candidate_id])
+                    )
+                else:
+                    b_val = (
+                        prev_solution["b"].get(c.candidate_id, 0)
+                        if use_prev_fallback and prev_solution is not None
+                        else solver.Value(choice_vars[c.candidate_id])
+                    )
+                    q_val = c.quantity if b_val == 1 else 0
+                if q_val > 0:
+                    selected_splits[c.order_id].append((c, int(q_val)))
                     selected_stage_by_order[c.order_id] = "STAGE_1_CPSAT"
-                    allocations_by_source_sku[(c.source_customer_id, c.sku)].append((c.order_id, c.quantity))
+                    allocations_by_source_sku[(c.source_customer_id, c.sku)].append((c.order_id, int(q_val)))
                     remaining_stock[(c.source_customer_id, c.sku)] = (
-                        remaining_stock.get((c.source_customer_id, c.sku), 0) - c.quantity
+                        remaining_stock.get((c.source_customer_id, c.sku), 0) - int(q_val)
                     )
                     if c.vehicle_id is not None:
                         used_vehicle_intervals[c.vehicle_id].append((c.trip_start, c.trip_end))
 
-        # Stage 2: Allocate any stranded residual stock to uncovered orders (respecting capacity, vehicle non-overlap & deadlines)
+        # Residual allocation is intentionally disabled for publishable runs.
+        # A greedy pass after CP-SAT changes the solution outside the objective
+        # and can make the persisted explanation differ from the selected plan.
+        # Callers may explicitly enable it for a labelled exploratory run.
         stage2_modified = False
-        for order in orders:
-            oid = order["id"]
-            if oid in selected_candidates:
-                continue
-            feas_cands = [c for c in candidates_by_order.get(oid, []) if c.is_feasible]
-            if not feas_cands:
-                continue
-            feas_cands.sort(key=lambda c: (c.distance_km, c.cost_per_keg_km))
-            for c in feas_cands:
-                rem = remaining_stock.get((c.source_customer_id, c.sku), 0)
-                if rem <= 0:
+        if bool(snapshot.get("allow_residual_allocation", False)):
+          for order in orders:
+                oid = order["id"]
+                if oid in selected_splits:
                     continue
-                if c.vehicle_id is not None:
-                    conflict = any(
-                        not (c.trip_end <= s or e <= c.trip_start)
-                        for s, e in used_vehicle_intervals.get(c.vehicle_id, [])
-                    )
-                    if conflict:
+                feas_cands = [c for c in candidates_by_order.get(oid, []) if c.is_feasible]
+                if not feas_cands:
+                    continue
+                feas_cands.sort(key=lambda c: (c.distance_km, c.cost_per_keg_km))
+                for c in feas_cands:
+                    rem = remaining_stock.get((c.source_customer_id, c.sku), 0)
+                    if rem <= 0:
                         continue
-                alloc_qty = min(c.quantity, rem)
-                if alloc_qty > 0:
-                    selected_candidates[oid] = (c, alloc_qty)
-                    selected_stage_by_order[oid] = "STAGE_2_RESIDUAL"
-                    allocations_by_source_sku[(c.source_customer_id, c.sku)].append((oid, alloc_qty))
-                    remaining_stock[(c.source_customer_id, c.sku)] = rem - alloc_qty
                     if c.vehicle_id is not None:
-                        used_vehicle_intervals[c.vehicle_id].append((c.trip_start, c.trip_end))
-                    stage2_modified = True
-                    break
+                        conflict = any(
+                            not (c.trip_end <= s or e <= c.trip_start)
+                            for s, e in used_vehicle_intervals.get(c.vehicle_id, [])
+                        )
+                        if conflict:
+                            continue
+                    alloc_qty = min(c.quantity, rem)
+                    if alloc_qty > 0:
+                        selected_splits[oid].append((c, alloc_qty))
+                        selected_stage_by_order[oid] = "EXPLORATORY_RESIDUAL"
+                        allocations_by_source_sku[(c.source_customer_id, c.sku)].append((oid, alloc_qty))
+                        remaining_stock[(c.source_customer_id, c.sku)] = rem - alloc_qty
+                        if c.vehicle_id is not None:
+                            used_vehicle_intervals[c.vehicle_id].append((c.trip_start, c.trip_end))
+                        stage2_modified = True
+                        break
 
+        selected_candidates = {
+            oid: max(sp, key=lambda x: x[1])
+            for oid, sp in selected_splits.items()
+            if sp
+        }
+        has_any_split = any(len(sp) > 1 for sp in selected_splits.values())
         planning_mode = "MODE_B_TRIP_LEVEL" if vehicles else "MODE_A_ORDER_LEVEL"
-        objective_policy = "lexicographic_staged_service_role_freight_v3"
-        split_policy = "single_source_per_order"
+        objective_policy = (
+            "cost_and_truck_optimal_with_splits_v4"
+            if source_policy == "cost_service_optimal"
+            else "lexicographic_staged_service_role_freight_v3"
+        )
+        split_policy = (
+            "multi_source_cpsat_splits"
+            if allow_order_splits and has_any_split
+            else ("multi_source_permitted_none_needed" if allow_order_splits else "single_source_per_order")
+        )
         omitted_total = sum(omitted_by_order.values())
 
         # Annotate every candidate evidence record with exact post-solve selection, remaining stock, competing orders, and reason code
@@ -838,31 +914,60 @@ class OrToolsFulfillmentPlanner:
             cust_type = dest_cust.get("type", "Brewer")
             dest_name = dest_cust.get("name", dest_id)
 
-            chosen = None
-            sel_qty = 0
-            if oid in selected_candidates:
-                chosen, sel_qty = selected_candidates[oid]
+            splits = selected_splits.get(oid) or []
+            if splits:
+                # Primary split (largest keg slice) drives header summary while allocation_lines captures every slice
+                chosen, _ = max(splits, key=lambda x: x[1])
+                sel_qty = sum(q for _, q in splits)
+                alloc_lines = []
+                actual_freight_inr = 0.0
+                for idx_l, (sc_cand, sq_qty) in enumerate(
+                    sorted(splits, key=lambda x: (-x[1], x[0].distance_km, x[0].source_customer_id)), start=1
+                ):
+                    used_stock_counter[(sc_cand.source_customer_id, sc_cand.sku)] += sq_qty
+                    lf = calculate_freight_cost_inr(sq_qty, sc_cand.distance_km, sc_cand.cost_per_keg_km)
+                    actual_freight_inr = round(actual_freight_inr + lf, 2)
+                    alloc_lines.append({
+                        "line_id": f"{oid}#S{idx_l}",
+                        "line_seq": idx_l,
+                        "source_customer_id": sc_cand.source_customer_id,
+                        "source_name": sc_cand.source_name,
+                        "source_role": customers.get(sc_cand.source_customer_id, {}).get("type", "Unknown"),
+                        "carrier_id": sc_cand.carrier_id,
+                        "carrier": sc_cand.carrier_name,
+                        "allocated_units": sq_qty,
+                        "distance_km": sc_cand.distance_km,
+                        "freight_cost_inr": lf,
+                        "transit_days": sc_cand.transit_days,
+                        "on_time_feasible": "Y" if sc_cand.is_feasible else "N",
+                        "trip_code": None,
+                        "stop_sequence": None,
+                    })
 
-            if chosen and sel_qty > 0:
-                used_stock_counter[(chosen.source_customer_id, chosen.sku)] += sel_qty
                 uncovered = max(0, pending - sel_qty)
-                is_on_time = chosen.is_feasible
-                actual_freight_inr = calculate_freight_cost_inr(
-                    sel_qty, chosen.distance_km, chosen.cost_per_keg_km
-                )
+                is_on_time = all(c.is_feasible for c, _ in splits)
                 planning_status = (
                     "Fully covered"
                     if sel_qty >= pending and is_on_time
                     else ("Partially covered" if sel_qty > 0 else "No allocation")
                 )
-                explanation = (
-                    f"Proposed {sel_qty} kegs ({sku}) from {chosen.source_name} via {chosen.distributor_name}. "
-                    f"Modeled carrier {chosen.carrier_name} over {chosen.distance_km} km ({chosen.transit_days}d transit). "
-                    f"Within deadline window with {chosen.slack_days}d slack."
-                    if is_on_time
-                    else f"Source {chosen.source_name} allocated {sel_qty} kegs, but transit time ({chosen.transit_days}d) "
-                    f"exceeds deadline slack by {-chosen.slack_days}d."
-                )
+                if len(splits) > 1:
+                    split_desc = ", ".join(f"{ln['allocated_units']} from {ln['source_name']} ({ln['distance_km']} km)" for ln in alloc_lines)
+                    src_hub_display = f"{len(alloc_lines)} sources ({alloc_lines[0]['source_name']} + {len(alloc_lines) - 1} more)"
+                    explanation = (
+                        f"Split {sel_qty} {sku} kegs across {len(alloc_lines)} nearby sources: {split_desc}. "
+                        f"Combined freight ₹{actual_freight_inr:,.2f}."
+                    )
+                else:
+                    src_hub_display = chosen.source_name
+                    explanation = (
+                        f"Proposed {sel_qty} kegs ({sku}) from {chosen.source_name} via {chosen.distributor_name}. "
+                        f"Carrier {chosen.carrier_name} over {chosen.distance_km} km ({chosen.transit_days}d transit). "
+                        f"Within deadline window with {chosen.slack_days}d slack."
+                        if is_on_time
+                        else f"Source {chosen.source_name} allocated {sel_qty} kegs, but transit time ({chosen.transit_days}d) "
+                        f"exceeds deadline slack by {-chosen.slack_days}d."
+                    )
 
                 outcomes.append(
                     PlannerOutcome(
@@ -880,7 +985,7 @@ class OrToolsFulfillmentPlanner:
                         allocated_units=sel_qty,
                         proposed_on_time_units=sel_qty if is_on_time else 0,
                         uncovered_units=uncovered,
-                        source_hub=chosen.source_name,
+                        source_hub=src_hub_display,
                         source_customer_id=chosen.source_customer_id,
                         distributor=chosen.distributor_name,
                         distributor_customer_id=chosen.distributor_id,
@@ -904,6 +1009,7 @@ class OrToolsFulfillmentPlanner:
                             if omitted_by_order.get(oid, 0) > 0
                             else None
                         ),
+                        allocation_lines=alloc_lines,
                     )
                 )
             else:
@@ -990,7 +1096,7 @@ class OrToolsFulfillmentPlanner:
         trips: List[Dict[str, Any]] = []
         shared_trips_count = 0
         if consolidate_trips:
-            trips, order_trip_updates = consolidate_trips_cpsat(
+            trips, line_trip_updates = consolidate_trips_cpsat(
                 outcomes=outcomes,
                 snapshot=snapshot,
                 distance_map=distance_map,
@@ -1013,34 +1119,57 @@ class OrToolsFulfillmentPlanner:
             if shared_trips_count > 0:
                 planning_mode = "MODE_B_CONSOLIDATED_TRIPS"
             for out in outcomes:
-                upd = order_trip_updates.get(out.order_id)
-                if upd:
-                    out.trip_id = upd["trip_code"]
-                    out.stop_sequence = upd["stop_sequence"]
-                    out.carrier = upd["carrier"]
-                    out.distance_km = upd["distance_km"]
-                    out.transit_days = upd["transit_days"]
-                    out.freight_cost_inr = upd["freight_cost_inr"]
-                    for ev in out.evidence:
-                        if ev.get("is_selected"):
-                            ev["carrier_id"] = upd["carrier_id"]
-                            ev["carrier"] = upd["carrier"]
-                            ev["carrier_name"] = upd["carrier"]
-                            ev["freight_cost_inr"] = upd["freight_cost_inr"]
-                            ev["distance_km"] = upd["distance_km"]
-                            ev["transit_days"] = upd["transit_days"]
-                            if upd["stop_count"] > 1:
-                                ev["reason"] = (
-                                    f"Selected on shared trip {upd['trip_code']} (Stop {upd['stop_sequence']} of {upd['stop_count']} "
-                                    f"via {upd['carrier']})."
-                                )
-                    if upd["stop_count"] > 1:
+                lines = getattr(out, "allocation_lines", None) or []
+                if not lines:
+                    continue
+                total_line_freight = 0.0
+                max_line_transit = 0
+                for ln in lines:
+                    upd = line_trip_updates.get(ln["line_id"])
+                    if upd:
+                        ln["trip_code"] = upd["trip_code"]
+                        ln["stop_sequence"] = upd["stop_sequence"]
+                        ln["carrier"] = upd["carrier"]
+                        ln["carrier_id"] = upd["carrier_id"]
+                        ln["distance_km"] = upd["distance_km"]
+                        ln["transit_days"] = upd["transit_days"]
+                        ln["freight_cost_inr"] = upd["freight_cost_inr"]
+                    total_line_freight = round(total_line_freight + float(ln["freight_cost_inr"]), 2)
+                    max_line_transit = max(max_line_transit, int(ln["transit_days"]))
+
+                primary_ln = max(lines, key=lambda l: l["allocated_units"])
+                out.trip_id = primary_ln.get("trip_code")
+                out.stop_sequence = primary_ln.get("stop_sequence")
+                out.carrier = primary_ln["carrier"]
+                out.distance_km = primary_ln["distance_km"]
+                out.transit_days = max_line_transit
+                out.freight_cost_inr = total_line_freight
+                if len(lines) == 1:
+                    upd = line_trip_updates.get(primary_ln["line_id"])
+                    if upd and upd["stop_count"] > 1:
                         out.explanation = (
                             f"Assigned {out.allocated_units} {out.keg_size} kegs from {out.source_hub} "
                             f"(Stop {upd['stop_sequence']} of {upd['stop_count']} on shared trip {upd['trip_code']} "
                             f"via {upd['carrier']}, {upd['trip_total_kegs']}/{upd['carrier_max_load_kegs']} keg truck load, "
                             f"{upd['distance_km']} km cumulative / {upd['transit_days']}d transit)."
                         )
+                else:
+                    split_desc = ", ".join(
+                        f"{l['allocated_units']} from {l['source_name']} ({l.get('trip_code') or 'direct'})"
+                        for l in lines
+                    )
+                    out.explanation = (
+                        f"Split {out.allocated_units} {out.keg_size} kegs across {len(lines)} nearby sources: {split_desc}. "
+                        f"Combined freight ₹{total_line_freight:,.2f}."
+                    )
+                for ev in out.evidence:
+                    if ev.get("is_selected"):
+                        ev["carrier_id"] = primary_ln.get("carrier_id")
+                        ev["carrier"] = primary_ln["carrier"]
+                        ev["carrier_name"] = primary_ln["carrier"]
+                        ev["freight_cost_inr"] = primary_ln["freight_cost_inr"]
+                        ev["distance_km"] = primary_ln["distance_km"]
+                        ev["transit_days"] = primary_ln["transit_days"]
 
         return {
             "solver_status": solver_status_name,
@@ -1111,6 +1240,29 @@ class OrToolsFulfillmentPlanner:
             if o.distance_km < 0 or o.freight_cost_inr < 0:
                 raise InvariantValidationError(f"Negative distance or freight on {o.order_id}")
             if o.allocated_units > 0:
+                lines = getattr(o, "allocation_lines", None) or []
+                if len(lines) > 1:
+                    if sum(int(ln["allocated_units"]) for ln in lines) != o.allocated_units:
+                        raise InvariantValidationError(f"Split line quantities do not sum to allocated_units on {o.order_id}")
+                    if abs(sum(float(ln["freight_cost_inr"]) for ln in lines) - o.freight_cost_inr) > 0.05:
+                        raise InvariantValidationError(f"Split line freight does not sum to freight_cost_inr on {o.order_id}")
+                    for ln in lines:
+                        l_src = ln["source_customer_id"]
+                        l_qty = int(ln["allocated_units"])
+                        recomputed_stock[(l_src, o.keg_size)] += l_qty
+                        if distance_map is not None:
+                            resolved = _resolve_route_legs(
+                                distance_map, l_src, o.distributor_customer_id or o.destination_customer_id,
+                                o.destination_customer_id, distributor_mode=o.distributor_mode, directed_lanes=directed_lanes,
+                            )
+                            if resolved is None or resolved[0] != int(ln["distance_km"]):
+                                raise InvariantValidationError(f"Split line distance mismatch on {o.order_id}")
+                        if carrier_max_load and ln["carrier"] in carrier_max_load:
+                            cap = carrier_max_load[ln["carrier"]]
+                            if cap > 0 and l_qty > cap:
+                                raise InvariantValidationError(f"Carrier capacity exceeded on split line of {o.order_id}")
+                    continue
+
                 if o.source_customer_id:
                     recomputed_stock[(o.source_customer_id, o.keg_size)] += o.allocated_units
 

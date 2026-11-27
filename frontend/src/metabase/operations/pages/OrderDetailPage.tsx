@@ -128,7 +128,34 @@ export function OrderDetailPage() {
       });
     }
 
-    if (ord.allocated_units > 0 && ord.src_lat != null && ord.src_lng != null) {
+    if (ord.allocated_units > 0 && detail.allocation_lines && detail.allocation_lines.length > 1 && ord.dest_lat != null && ord.dest_lng != null) {
+      for (const ln of detail.allocation_lines) {
+        if (ln.src_lat != null && ln.src_lng != null) {
+          markers.push({
+            id: `split-src-${ln.line_seq}-${ln.source_customer_id}`,
+            lat: Number(ln.src_lat),
+            lng: Number(ln.src_lng),
+            label: `Split ${ln.line_seq}: ${ln.source_name}`,
+            badgeText: ln.source_role,
+            sublabel: `${ln.allocated_units} ${ord.keg_size} kegs · ${ln.distance_km} km · ₹${Number(ln.freight_cost_inr).toLocaleString()} via ${ln.carrier}${ln.trip_code ? ` (${ln.trip_code})` : ""}`,
+            color: "#2563EB",
+            radius: 10,
+            selected: true,
+          });
+          lines.push({
+            id: `split-leg-${ln.line_seq}`,
+            fromLat: Number(ln.src_lat),
+            fromLng: Number(ln.src_lng),
+            toLat: Number(ord.dest_lat),
+            toLng: Number(ord.dest_lng),
+            color: "#2563EB",
+            dashed: true,
+            highlighted: true,
+            label: `Split ${ln.line_seq}: ${ln.source_name} → ${ord.destination_brewer} (${ln.allocated_units} kegs, ${ln.distance_km} km)`,
+          });
+        }
+      }
+    } else if (ord.allocated_units > 0 && ord.src_lat != null && ord.src_lng != null) {
       markers.push({
         id: `src-${ord.source_customer_id}`,
         lat: Number(ord.src_lat),
@@ -308,9 +335,9 @@ export function OrderDetailPage() {
             backgroundColor: "var(--mb-color-background-secondary)",
           }}
         >
-          <Text size="xs" fw={600} mb={4}>{t`Technical Provenance & Diagnostics`}</Text>
+          <Text size="xs" fw={600} mb={4}>{t`Plan evidence`}</Text>
           <Text size="xs" c="text-secondary">
-            {t`Plan reference: ${run.run_id} · Scope: Order-level single source · Policy: ${planning_policy?.source_policy_label || t`Service-First Fallback`}`}
+            {t`Planning run ${run.run_id} · ${planning_policy?.source_policy_label || t`Service-first sourcing`}`}
           </Text>
         </Box>
       )}
@@ -396,8 +423,50 @@ export function OrderDetailPage() {
         </Box>
 
         <Box p="md" style={{ flex: "1 1 360px", border: "1px solid var(--mb-color-border)", borderRadius: 10 }}>
-          <Title order={4} mb="sm">{t`Proposed journey & timeline`}</Title>
-          <Box mb="md">
+          <Flex justify="space-between" align="center" mb="sm" wrap="wrap" gap="xs">
+            <Title order={4}>{t`Proposed journey & timeline`}</Title>
+            {detail.trip && (
+              <Badge
+                size="xs"
+                style={{
+                  backgroundColor: detail.trip.stop_count > 1 ? "#E6F4EA" : "#F1F3F4",
+                  color: detail.trip.stop_count > 1 ? "#137333" : "#3C4043",
+                  textTransform: "none",
+                }}
+              >
+                {detail.trip.stop_count > 1
+                  ? t`Shared trip ${detail.trip.trip_code} · Stop ${order.stop_sequence || 1} of ${detail.trip.stop_count}`
+                  : t`Direct trip ${detail.trip.trip_code}`}
+              </Badge>
+            )}
+          </Flex>
+          {detail.allocation_lines && detail.allocation_lines.length > 1 ? (
+            <Box mb="md">
+              <Text size="xs" fw={600} c="blue" mb="xs">
+                {t`Multi-source split fulfillment (${detail.allocation_lines.length} nearby sources combined to save cost):`}
+              </Text>
+              {detail.allocation_lines.map((ln) => (
+                <Flex key={ln.line_id} justify="space-between" align="center" py={4} style={{ borderBottom: "1px dashed var(--mb-color-border)" }}>
+                  <Group gap="xs">
+                    <Badge size="xs" style={{ backgroundColor: "#E8F0FE", color: "#1967D2", textTransform: "none" }}>
+                      {ln.source_role}
+                    </Badge>
+                    <Text size="xs" fw={600}>{ln.source_name}</Text>
+                  </Group>
+                  <Text size="xs">
+                    {`${ln.allocated_units} kegs · ${ln.distance_km} km · ₹${Number(ln.freight_cost_inr).toLocaleString()} (${ln.carrier}${ln.trip_code ? ` · ${ln.trip_code}` : ""})`}
+                  </Text>
+                </Flex>
+              ))}
+              <Flex align="center" gap="xs" wrap="wrap" mt="xs">
+                <Badge style={{ backgroundColor: "#EDE7F6", color: "#4527A0", textTransform: "none" }}>
+                  {t`Destination Brewer`}
+                </Badge>
+                <Text fw={600} size="sm">{order.destination_brewer}</Text>
+              </Flex>
+            </Box>
+          ) : (
+            <Box mb="md">
             <Flex align="center" gap="xs" wrap="wrap" mb="xs">
               <Badge style={{ backgroundColor: "#E8F0FE", color: "#1967D2", textTransform: "none" }}>
                 {order.src_role || t`Source`}
@@ -414,6 +483,7 @@ export function OrderDetailPage() {
               <Text fw={600} size="sm">{order.destination_brewer}</Text>
             </Flex>
           </Box>
+          )}
 
           <Title order={5} mb="xs">{t`Timing & feasibility`}</Title>
           {order.timeline.map((item) => (
@@ -463,7 +533,7 @@ export function OrderDetailPage() {
             <Text size="sm" mb="xs">{order.why_this_plan}</Text>
             <Group gap="md" wrap="wrap">
               <Text size="xs" c="text-secondary">
-                {t`Source policy: ${planning_policy?.source_policy_label || t`Depot-First — approved facilities and distributors`}`}
+                {t`Sourcing approach: ${planning_policy?.source_policy_label || t`Maintenance facilities first, then distributors`}`}
               </Text>
               {order.cost_formula && (
                 <Text size="xs" c="text-secondary">

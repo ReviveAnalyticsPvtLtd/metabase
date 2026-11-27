@@ -35,7 +35,7 @@ export function SimulationBanner({
             {run?.source_policy_label || t`Service-First Fallback — Facility > Distributor > Brewer`}
           </Text>
           <Text size="xs" c="text-secondary">
-            {t`Proposed simulation (not booked or reserved)`}
+            {t`Planning proposal — confirm before dispatch`}
             {asOfStr ? t` · Simulated as of ${asOfStr}` : ""}
             {pubStr ? t` · Published ${pubStr}` : ""}
             {run ? t` · ${run.horizon_orders.toLocaleString()} of ${run.total_open_orders.toLocaleString()} open orders` : ""}
