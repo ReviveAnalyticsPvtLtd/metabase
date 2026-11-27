@@ -118,8 +118,52 @@ export interface PlanningPolicy {
   map_mode: string;
 }
 
+export interface TripSummary {
+  trip_id: string;
+  trip_code: string;
+  source_customer_id: string;
+  source_name: string;
+  source_role: string;
+  carrier_name: string;
+  carrier_max_load_kegs: number;
+  total_kegs: number;
+  utilization_pct: number;
+  stop_count: number;
+  total_distance_km: number;
+  total_freight_inr: number;
+  dispatch_date: string;
+}
+
+export interface TripStopItem {
+  stop_id: string;
+  trip_code: string;
+  stop_sequence: number;
+  order_id: string;
+  destination_customer_id: string;
+  destination_name: string;
+  keg_size: string;
+  kegs_delivered: number;
+  load_before_stop_kegs: number;
+  load_after_stop_kegs: number;
+  leg_from_id: string;
+  leg_from_name: string;
+  leg_distance_km: number;
+  cumulative_distance_km: number;
+  cumulative_transit_days: number;
+  needed_by: string;
+  allocated_freight_inr: number;
+  dest_lat?: number | null;
+  dest_lng?: number | null;
+  dest_city?: string | null;
+  from_lat?: number | null;
+  from_lng?: number | null;
+  is_current_order?: boolean;
+}
+
 export interface OrderDetailResponse {
   order: OrderDetailItem;
+  trip?: TripSummary | null;
+  trip_stops?: TripStopItem[];
   consistency_check?: ConsistencyCheck;
   planning_policy?: PlanningPolicy;
   run: OperationsRunSummary;

@@ -133,15 +133,45 @@ export function OrderDetailPage() {
         id: `src-${ord.source_customer_id}`,
         lat: Number(ord.src_lat),
         lng: Number(ord.src_lng),
-        label: `Selected Source: ${ord.source_hub}`,
+        label: `0. Source: ${ord.source_hub}`,
         badgeText: ord.src_role || "Source",
-        sublabel: `${ord.src_city || ""}${ord.src_state ? `, ${ord.src_state}` : ""} · ${ord.allocated_units} ${ord.keg_size} kegs via ${ord.carrier}`,
+        sublabel: `${ord.src_city || ""}${ord.src_state ? `, ${ord.src_state}` : ""} · ${detail.trip ? `${detail.trip.total_kegs} kegs (${detail.trip.stop_count} stops)` : `${ord.allocated_units} ${ord.keg_size} kegs`} via ${ord.carrier}`,
         color: "#2563EB",
         radius: 10,
         selected: true,
       });
 
-      if (ord.dest_lat != null && ord.dest_lng != null) {
+      if (detail.trip_stops && detail.trip_stops.length > 0) {
+        for (const st of detail.trip_stops) {
+          if (st.from_lat != null && st.from_lng != null && st.dest_lat != null && st.dest_lng != null) {
+            lines.push({
+              id: `trip-leg-${st.stop_sequence}`,
+              fromLat: Number(st.from_lat),
+              fromLng: Number(st.from_lng),
+              toLat: Number(st.dest_lat),
+              toLng: Number(st.dest_lng),
+              color: st.is_current_order ? "#2563EB" : "#0D9488",
+              dashed: true,
+              highlighted: Boolean(st.is_current_order),
+              label: `Leg ${st.stop_sequence}: ${st.leg_from_name} → ${st.destination_name} (${st.leg_distance_km} km modeled · ${st.load_before_stop_kegs} kegs onboard)`,
+            });
+          }
+          if (!st.is_current_order && st.dest_lat != null && st.dest_lng != null) {
+            markers.push({
+              id: `trip-stop-${st.stop_sequence}-${st.order_id}`,
+              lat: Number(st.dest_lat),
+              lng: Number(st.dest_lng),
+              label: `${st.stop_sequence}. ${st.order_id} · ${st.destination_name}`,
+              badgeText: `Stop ${st.stop_sequence}`,
+              sublabel: `${st.dest_city || ""} · Delivers ${st.kegs_delivered} ${st.keg_size} kegs (rem ${st.load_after_stop_kegs} kegs)`,
+              color: "#0D9488",
+              radius: 8,
+              selected: false,
+              onClick: () => navigate(`/operations/orders/${encodeURIComponent(st.order_id)}`),
+            });
+          }
+        }
+      } else if (ord.dest_lat != null && ord.dest_lng != null) {
         lines.push({
           id: "selected-leg",
           fromLat: Number(ord.src_lat),
@@ -735,12 +765,82 @@ export function OrderDetailPage() {
         ) : null}
       </Box>
 
-      {/* Other orders on the same trip */}
+      {/* Shared Trip & Ordered Stops */}
       <Box p="md" style={{ border: "1px solid var(--mb-color-border)", borderRadius: 8 }}>
-        <Title order={4} mb="xs">{t`Other orders on the same trip`}</Title>
-        <Text size="sm" c="text-secondary">
+        <Flex justify="space-between" align="center" mb="xs" wrap="wrap" gap="xs">
+          <Title order={4}>{t`Other orders on the same trip`}</Title>
+          {detail.trip && (
+            <Badge
+              size="sm"
+              style={{
+                backgroundColor: detail.trip.stop_count > 1 ? "#E6F4EA" : "#F1F3F4",
+                color: detail.trip.stop_count > 1 ? "#137333" : "#3C4043",
+                textTransform: "none",
+              }}
+            >
+              {t`${detail.trip.trip_code} · ${detail.trip.total_kegs}/${detail.trip.carrier_max_load_kegs} kegs (${detail.trip.utilization_pct}% truck load)`}
+            </Badge>
+          )}
+        </Flex>
+        <Text size="sm" c="text-secondary" mb={detail.trip_stops && detail.trip_stops.length > 0 ? "sm" : 0}>
           {planning_policy?.shared_trip_message || t`No validated shared-trip record is available for this proposal.`}
         </Text>
+        {detail.trip_stops && detail.trip_stops.length > 0 && (
+          <Box style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead>
+                <tr style={{ borderBottom: "1px solid var(--mb-color-border)", textAlign: "left" }}>
+                  <th style={{ padding: "6px 8px" }}>{t`Stop`}</th>
+                  <th style={{ padding: "6px 8px" }}>{t`Order`}</th>
+                  <th style={{ padding: "6px 8px" }}>{t`Destination`}</th>
+                  <th style={{ padding: "6px 8px", textAlign: "right" }}>{t`Delivered`}</th>
+                  <th style={{ padding: "6px 8px", textAlign: "right" }}>{t`Truck Load (Before → After)`}</th>
+                  <th style={{ padding: "6px 8px", textAlign: "right" }}>{t`Leg / Cum. Distance`}</th>
+                  <th style={{ padding: "6px 8px", textAlign: "right" }}>{t`Due`}</th>
+                  <th style={{ padding: "6px 8px", textAlign: "right" }}>{t`Share of Freight`}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {detail.trip_stops.map((st) => (
+                  <tr
+                    key={st.stop_id}
+                    style={{
+                      borderBottom: "1px solid var(--mb-color-border)",
+                      backgroundColor: st.is_current_order ? "rgba(37, 99, 235, 0.06)" : undefined,
+                    }}
+                  >
+                    <td style={{ padding: "6px 8px", fontWeight: 600 }}>{`Stop ${st.stop_sequence}`}</td>
+                    <td style={{ padding: "6px 8px" }}>
+                      {st.is_current_order ? (
+                        <Text size="xs" fw={700}>{`${st.order_id} (This order)`}</Text>
+                      ) : (
+                        <Button
+                          size="xs"
+                          variant="subtle"
+                          onClick={() => navigate(`/operations/orders/${encodeURIComponent(st.order_id)}`)}
+                        >
+                          {st.order_id}
+                        </Button>
+                      )}
+                    </td>
+                    <td style={{ padding: "6px 8px" }}>{st.destination_name}</td>
+                    <td style={{ padding: "6px 8px", textAlign: "right" }}>{`${st.kegs_delivered} ${st.keg_size}`}</td>
+                    <td style={{ padding: "6px 8px", textAlign: "right" }}>
+                      {`${st.load_before_stop_kegs} → ${st.load_after_stop_kegs}`}
+                    </td>
+                    <td style={{ padding: "6px 8px", textAlign: "right" }}>
+                      {`${st.leg_distance_km} km (${st.cumulative_distance_km} km cum)`}
+                    </td>
+                    <td style={{ padding: "6px 8px", textAlign: "right" }}>{String(st.needed_by).slice(0, 10)}</td>
+                    <td style={{ padding: "6px 8px", textAlign: "right" }}>
+                      {`₹${Number(st.allocated_freight_inr).toLocaleString()}`}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Box>
+        )}
       </Box>
     </Box>
   );

@@ -242,6 +242,55 @@ class ExplainabilityAuditTests(unittest.TestCase):
         self.assertFalse(out["ok"])
         self.assertFalse(out.get("feasible", True))
 
+    def test_multi_order_trip_consolidation_saves_trucks_and_validates(self):
+        snap = _sample_snapshot()
+        snap["as_of_date"] = "2026-01-02"
+        snap["directed_lanes"] = True
+        snap["consolidate_trips"] = True
+        # Two orders going to nearby Brewer corridors with a 1-truck cap on cheap carrier
+        snap["carrier_truck_limits"] = {"EastWest Transport": 1, "Deccan Freight": 2}
+        snap["carriers"]["CAR-02"] = {
+            "id": "CAR-02", "name": "Deccan Freight", "rate_inr": 2.50, "rate_paise": 250, "max_load": 500
+        }
+        snap["customers"]["CUST-DEST2"] = {
+            "id": "CUST-DEST2", "name": "Dest Brewer 2", "type": "Brewer",
+            "region": "North", "city": "Jaipur", "lat": 26.92, "lon": 75.81,
+        }
+        snap["stock"] = [{"source": "CUST-NEAR", "sku": "50L", "available": 300}]
+        snap["legs"].extend([
+            {"origin": "CUST-NEAR", "destination": "CUST-DEST2", "km": 55},
+            {"origin": "CUST-DEST", "destination": "CUST-DEST2", "km": 5},
+            {"origin": "CUST-DEST2", "destination": "CUST-DEST", "km": 5},
+        ])
+        snap["orders"] = [
+            {
+                "id": "ORD-1", "customer_id": "CUST-DEST", "sku": "50L",
+                "ordered_date": "2026-01-01", "needed_by_date": "2026-01-10",
+                "quantity_ordered": 100, "fulfilled_units": 0, "pending": 100,
+            },
+            {
+                "id": "ORD-2", "customer_id": "CUST-DEST2", "sku": "50L",
+                "ordered_date": "2026-01-01", "needed_by_date": "2026-01-10",
+                "quantity_ordered": 100, "fulfilled_units": 0, "pending": 100,
+            },
+        ]
+        planner = OrToolsFulfillmentPlanner(
+            time_limit_seconds=10, max_candidates_per_order=10, source_policy="service_first_fallback"
+        )
+        res = planner.plan(snap)
+        self.assertEqual(res["shared_trips_count"], 1)
+        self.assertEqual(res["trips_total"], 1)
+        self.assertEqual(res["planning_mode"], "MODE_B_CONSOLIDATED_TRIPS")
+        trip = res["trips"][0]
+        self.assertEqual(trip["stop_count"], 2)
+        self.assertEqual(trip["carrier_name"], "EastWest Transport")
+        self.assertEqual(trip["total_kegs"], 200)
+        # 200 kegs * 50km + 100 kegs * 5km = 10,500 keg-km * INR 2.0 = INR 21,000 (cheaper than separate 100*50*2 + 100*55*2 = 21,000 using 2 trucks!)
+        self.assertEqual(trip["stops"][0]["load_before_stop_kegs"], 200)
+        self.assertEqual(trip["stops"][0]["load_after_stop_kegs"], 100)
+        self.assertEqual(trip["stops"][1]["load_before_stop_kegs"], 100)
+        self.assertEqual(trip["stops"][1]["load_after_stop_kegs"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

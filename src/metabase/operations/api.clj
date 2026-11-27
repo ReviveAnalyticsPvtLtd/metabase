@@ -469,7 +469,45 @@
                                aod (some-> (:as_of_date run) str (subs 0 10))]
                            (and nb aod (neg? (compare nb aod))))
           deadline-feasible? (and (= "Y" (:on_time_feasible row)) (not overdue-as-of?))
-          modeled-legs (if (pos? proposed)
+          trip-code  (:trip_id row)
+          trip-row   (when (and (pos? proposed) (seq trip-code))
+                       (first (run-native-query
+                               "SELECT * FROM nubrix_poc_trips WHERE run_id = ? AND trip_code = ? LIMIT 1"
+                               [pinned trip-code])))
+          trip-stops (when trip-row
+                       (let [catalog (customer-catalog-by-id)
+                             raw-stops (run-native-query
+                                        "SELECT * FROM nubrix_poc_trip_stops
+                                         WHERE run_id = ? AND trip_code = ?
+                                         ORDER BY stop_sequence ASC"
+                                        [pinned trip-code])]
+                         (mapv (fn [st]
+                                 (let [dc (get catalog (:destination_customer_id st))
+                                       fc (get catalog (:leg_from_id st))]
+                                   (assoc st
+                                          :dest_lat (:Latitude dc)
+                                          :dest_lng (:Longitude dc)
+                                          :dest_city (:ShippingCity dc)
+                                          :from_lat (:Latitude fc)
+                                          :from_lng (:Longitude fc)
+                                          :is_current_order (= (:order_id st) order-id))))
+                               raw-stops)))
+          modeled-legs (cond
+                         (seq trip-stops)
+                         (mapv (fn [st]
+                                 {:leg_index (:stop_sequence st)
+                                  :from_id   (:leg_from_id st)
+                                  :from_name (:leg_from_name st)
+                                  :to_id     (:destination_customer_id st)
+                                  :to_name   (:destination_name st)
+                                  :distance_km (long (or (:leg_distance_km st) 0))
+                                  :transit_days (long (or (:cumulative_transit_days st) 0))
+                                  :carrier   (:carrier_name trip-row)
+                                  :quantity  (long (or (:load_before_stop_kegs st) 0))
+                                  :basis     "modeled"})
+                               trip-stops)
+
+                         (pos? proposed)
                          [{:leg_index 1
                            :from_id   (:source_customer_id row)
                            :from_name (:source_hub row)
@@ -480,7 +518,27 @@
                            :carrier   (:carrier row)
                            :quantity  proposed
                            :basis     "modeled"}]
-                         [])]
+
+                         :else [])
+          stop-cnt     (long (or (:stop_count trip-row) 0))
+          trip-msg     (cond
+                         (and trip-row (> stop-cnt 1))
+                         (format "Consolidated %d-stop trip (%s) carrying %d of %d keg capacity (%.1f%% utilization) via %s."
+                                 stop-cnt (:trip_code trip-row)
+                                 (long (or (:total_kegs trip-row) 0))
+                                 (long (or (:carrier_max_load_kegs trip-row) 0))
+                                 (double (or (:utilization_pct trip-row) 0.0))
+                                 (:carrier_name trip-row))
+
+                         trip-row
+                         (format "Direct 1-stop dispatch (%s) carrying %d of %d keg capacity via %s."
+                                 (:trip_code trip-row)
+                                 (long (or (:total_kegs trip-row) 0))
+                                 (long (or (:carrier_max_load_kegs trip-row) 0))
+                                 (:carrier_name trip-row))
+
+                         :else
+                         "No validated shared-trip record is available for this proposal.")]
       {:order       (assoc row
                            :status (normalize-status row)
                            :reconciled reconciled?
@@ -496,6 +554,8 @@
                                        :feasible deadline-feasible?
                                        :overdue_vs_as_of overdue-as-of?
                                        :basis (if overdue-as-of? "overdue vs planning as-of" "modeled")}])
+       :trip        trip-row
+       :trip_stops  (or trip-stops [])
        :quantity_reconciliation {:ordered ordered
                                  :fulfilled fulfilled
                                  :pending pending
@@ -510,8 +570,8 @@
                          :split_policy (:split_policy run)
                          :objective_policy (:objective_policy run)
                          :decision_stage (or (:decision_stage row) (:decision_stage sel-ev) "UNKNOWN")
-                         :trip_capability false
-                         :shared_trip_message "No validated shared-trip record is available for this proposal."
+                         :trip_capability (boolean trip-row)
+                         :shared_trip_message trip-msg
                          :map_mode "schematic"}
        :run         run
        :disclosures standard-disclosures})))

@@ -116,6 +116,53 @@ CREATE_TABLES_SQL = [
         PRIMARY KEY (`OriginCustomerId`, `DestCustomerId`)
     ) ENGINE=InnoDB;
     """,
+    """
+    CREATE TABLE IF NOT EXISTS `nubrix_poc_trips` (
+        `trip_id` VARCHAR(64) PRIMARY KEY,
+        `run_id` VARCHAR(64) NOT NULL,
+        `trip_code` VARCHAR(32) NOT NULL,
+        `source_customer_id` VARCHAR(64) NOT NULL,
+        `source_name` VARCHAR(255) NOT NULL,
+        `source_role` VARCHAR(64) NOT NULL,
+        `carrier_id` VARCHAR(64) NOT NULL,
+        `carrier_name` VARCHAR(100) NOT NULL,
+        `carrier_max_load_kegs` INT NOT NULL,
+        `total_kegs` INT NOT NULL,
+        `utilization_pct` DECIMAL(6,2) NOT NULL,
+        `stop_count` INT NOT NULL,
+        `total_distance_km` INT NOT NULL,
+        `total_freight_inr` DECIMAL(12,2) NOT NULL,
+        `dispatch_date` DATE NOT NULL,
+        KEY `idx_trips_run` (`run_id`),
+        KEY `idx_trips_code` (`run_id`, `trip_code`)
+    ) ENGINE=InnoDB;
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS `nubrix_poc_trip_stops` (
+        `stop_id` VARCHAR(80) PRIMARY KEY,
+        `trip_id` VARCHAR(64) NOT NULL,
+        `run_id` VARCHAR(64) NOT NULL,
+        `trip_code` VARCHAR(32) NOT NULL,
+        `stop_sequence` INT NOT NULL,
+        `order_id` VARCHAR(64) NOT NULL,
+        `destination_customer_id` VARCHAR(64) NOT NULL,
+        `destination_name` VARCHAR(255) NOT NULL,
+        `keg_size` VARCHAR(16) NOT NULL,
+        `kegs_delivered` INT NOT NULL,
+        `load_before_stop_kegs` INT NOT NULL,
+        `load_after_stop_kegs` INT NOT NULL,
+        `leg_from_id` VARCHAR(64) NOT NULL,
+        `leg_from_name` VARCHAR(255) NOT NULL,
+        `leg_distance_km` INT NOT NULL,
+        `cumulative_distance_km` INT NOT NULL,
+        `cumulative_transit_days` INT NOT NULL,
+        `needed_by` DATE NOT NULL,
+        `on_time_feasible` CHAR(1) NOT NULL,
+        `allocated_freight_inr` DECIMAL(12,2) NOT NULL,
+        KEY `idx_stops_run_order` (`run_id`, `order_id`),
+        KEY `idx_stops_trip` (`trip_id`, `stop_sequence`)
+    ) ENGINE=InnoDB;
+    """,
 ]
 
 
@@ -145,11 +192,15 @@ class PocStorageManager:
             ("nubrix_poc_runs", "split_policy", "VARCHAR(64) NULL"),
             ("nubrix_poc_runs", "omitted_candidates_total", "INT NULL"),
             ("nubrix_poc_runs", "snapshot_hash", "VARCHAR(64) NULL"),
+            ("nubrix_poc_runs", "trips_total", "INT NULL"),
+            ("nubrix_poc_runs", "shared_trips_count", "INT NULL"),
             ("nubrix_poc_allocations", "selected_candidate_id", "INT NULL"),
             ("nubrix_poc_allocations", "decision_stage", "VARCHAR(32) NULL"),
             ("nubrix_poc_allocations", "carrier_id", "VARCHAR(64) NULL"),
             ("nubrix_poc_allocations", "distributor_mode", "VARCHAR(32) NULL"),
             ("nubrix_poc_allocations", "omitted_candidates_count", "INT DEFAULT 0"),
+            ("nubrix_poc_allocations", "trip_id", "VARCHAR(64) NULL"),
+            ("nubrix_poc_allocations", "stop_sequence", "INT NULL"),
             ("nubrix_poc_candidate_evidence", "source_name", "VARCHAR(255) NULL"),
             ("nubrix_poc_candidate_evidence", "distributor_customer_id", "VARCHAR(64) NULL"),
             ("nubrix_poc_candidate_evidence", "distributor_name", "VARCHAR(255) NULL"),
@@ -232,8 +283,9 @@ class PocStorageManager:
                         run_id, created_at, as_of_date, solver_status, orders_total,
                         orders_fully_covered, orders_partially_covered, orders_uncovered,
                         kegs_ordered, kegs_allocated, total_freight_inr, provenance_json, is_active,
-                        planning_mode, objective_policy, split_policy, omitted_candidates_total
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        planning_mode, objective_policy, split_policy, omitted_candidates_total,
+                        trips_total, shared_trips_count
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     run_id, now_dt, as_of_date.strftime("%Y-%m-%d"),
                     plan_result.get("solver_status", "optimal_over_candidates"),
@@ -245,6 +297,8 @@ class PocStorageManager:
                     plan_result.get("objective_policy", "lexicographic_equivalent_weighted_v2"),
                     plan_result.get("split_policy", "single_source_per_order"),
                     plan_result.get("omitted_candidates_total"),
+                    plan_result.get("trips_total", 0),
+                    plan_result.get("shared_trips_count", 0),
                 ))
 
                 # Insert Allocations
@@ -257,12 +311,13 @@ class PocStorageManager:
                         distributor, distributor_customer_id, carrier, distance_km,
                         freight_cost_inr, transit_days, on_time_feasible, planning_status,
                         explanation, planning_basis, is_active_run,
-                        selected_candidate_id, decision_stage, carrier_id, distributor_mode, omitted_candidates_count
+                        selected_candidate_id, decision_stage, carrier_id, distributor_mode, omitted_candidates_count,
+                        trip_id, stop_sequence
                     ) VALUES (
                         %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                         %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                         %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s
+                        %s, %s, %s, %s, %s, %s, %s
                     )
                 """
                 alloc_data = [
@@ -277,10 +332,51 @@ class PocStorageManager:
                         1 if set_active else 0,
                         a.get("selected_candidate_id"), a.get("decision_stage"), a.get("carrier_id"),
                         a.get("distributor_mode", "coordinator"), int(a.get("omitted_candidates_count", 0) or 0),
+                        a.get("trip_id"), a.get("stop_sequence"),
                     )
                     for a in allocations
                 ]
                 cursor.executemany(alloc_sql, alloc_data)
+
+                # Insert consolidated trips & stops if present
+                trips_list = plan_result.get("trips") or []
+                if trips_list:
+                    trip_sql = """
+                        INSERT INTO nubrix_poc_trips (
+                            trip_id, run_id, trip_code, source_customer_id, source_name, source_role,
+                            carrier_id, carrier_name, carrier_max_load_kegs, total_kegs, utilization_pct,
+                            stop_count, total_distance_km, total_freight_inr, dispatch_date
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """
+                    trip_rows = []
+                    stop_rows = []
+                    for t in trips_list:
+                        full_tid = f"{run_id}-{t['trip_code']}"
+                        trip_rows.append((
+                            full_tid, run_id, t["trip_code"], t["source_customer_id"], t["source_name"], t["source_role"],
+                            t["carrier_id"], t["carrier_name"], t["carrier_max_load_kegs"], t["total_kegs"], t["utilization_pct"],
+                            t["stop_count"], t["total_distance_km"], t["total_freight_inr"], t["dispatch_date"],
+                        ))
+                        for st in t["stops"]:
+                            stop_id = f"{full_tid}-S{st['stop_sequence']:02d}"
+                            stop_rows.append((
+                                stop_id, full_tid, run_id, t["trip_code"], st["stop_sequence"], st["order_id"],
+                                st["destination_customer_id"], st["destination_name"], st["keg_size"], st["kegs_delivered"],
+                                st["load_before_stop_kegs"], st["load_after_stop_kegs"], st["leg_from_id"], st["leg_from_name"],
+                                st["leg_distance_km"], st["cumulative_distance_km"], st["cumulative_transit_days"],
+                                st["needed_by"], st["on_time_feasible"], st["allocated_freight_inr"],
+                            ))
+                    cursor.executemany(trip_sql, trip_rows)
+                    stop_sql = """
+                        INSERT INTO nubrix_poc_trip_stops (
+                            stop_id, trip_id, run_id, trip_code, stop_sequence, order_id,
+                            destination_customer_id, destination_name, keg_size, kegs_delivered,
+                            load_before_stop_kegs, load_after_stop_kegs, leg_from_id, leg_from_name,
+                            leg_distance_km, cumulative_distance_km, cumulative_transit_days,
+                            needed_by, on_time_feasible, allocated_freight_inr
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """
+                    cursor.executemany(stop_sql, stop_rows)
 
                 # Insert Evidence if provided
                 if evidence_list:

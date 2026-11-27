@@ -24,6 +24,7 @@ from domain_contract import (
     compute_transit_days,
     evaluate_deadline_feasibility,
 )
+from trip_consolidator import consolidate_trips_cpsat, validate_consolidated_trips
 
 
 @dataclass
@@ -56,6 +57,8 @@ class CandidateOption:
     decision_stage: str = "UNALLOCATED"
     omitted_candidates_count: int = 0
     omitted_reason: Optional[str] = None
+    trip_id: Optional[str] = None
+    stop_sequence: Optional[int] = None
     route_legs: List[Tuple[str, str, int]] = field(default_factory=list)
 
 
@@ -95,6 +98,8 @@ class PlannerOutcome:
     decision_stage: str = "UNALLOCATED"
     omitted_candidates_count: int = 0
     omitted_reason: Optional[str] = None
+    trip_id: Optional[str] = None
+    stop_sequence: Optional[int] = None
 
 
 class InvariantValidationError(Exception):
@@ -189,7 +194,11 @@ class OrToolsFulfillmentPlanner:
         handling_days = int(snapshot.get("distributor_handling_days", 0) or 0)
         source_policy = str(snapshot.get("source_policy", self.source_policy) or "depot_first")
         vehicles = list(snapshot.get("vehicles") or [])
+        consolidate_trips = bool(snapshot.get("consolidate_trips", False))
         carrier_truck_limits = dict(snapshot.get("carrier_truck_limits") or {})
+        # When consolidating multi-order trips in Phase 2, Phase 1 focuses on source selection and
+        # enforces per-order carrier capacity; Phase 2 enforces finite carrier truck caps across trips.
+        phase1_truck_limits = {} if consolidate_trips else carrier_truck_limits
         base_date = date(2026, 7, 1)
 
         # Build distributor list by region
@@ -386,7 +395,7 @@ class OrToolsFulfillmentPlanner:
                 trip_start_min = (dispatch_start - base_date).days * 1440
                 trip_end_min = trip_start_min + max(1, transit_days) * 1440
 
-                if not vehicles and not carrier_truck_limits:
+                if not vehicles and not phase1_truck_limits:
                     sorted_cars = sorted(
                         raw_carriers,
                         key=lambda c: (float(c.get("rate_inr", 2.0)), -int(c.get("max_load", 0) or 0)),
@@ -568,12 +577,12 @@ class OrToolsFulfillmentPlanner:
         for intervals in vehicle_intervals.values():
             model.AddNoOverlap(intervals)
 
-        # Constraint 4: Finite carrier truck/dispatch limits when modeled
-        if carrier_truck_limits:
+        # Constraint 4: Finite carrier truck/dispatch limits when modeled at order level
+        if phase1_truck_limits:
             carrier_dispatches = defaultdict(list)
             for c in feasible_candidates:
                 carrier_dispatches[c.carrier_name].append(choice_vars[c.candidate_id])
-            for car_name, max_trucks in carrier_truck_limits.items():
+            for car_name, max_trucks in phase1_truck_limits.items():
                 if car_name in carrier_dispatches and max_trucks is not None:
                     model.Add(sum(carrier_dispatches[car_name]) <= int(max_trucks))
 
@@ -978,6 +987,61 @@ class OrToolsFulfillmentPlanner:
             vehicles_by_id=vehicles_by_id,
         )
 
+        trips: List[Dict[str, Any]] = []
+        shared_trips_count = 0
+        if consolidate_trips:
+            trips, order_trip_updates = consolidate_trips_cpsat(
+                outcomes=outcomes,
+                snapshot=snapshot,
+                distance_map=distance_map,
+                directed_lanes=directed_lanes,
+                as_of_d=as_of_d,
+                carrier_truck_limits=carrier_truck_limits or None,
+                time_limit_seconds=max(15.0, float(self.time_limit_seconds) * 0.25),
+                max_stops_per_trip=int(snapshot.get("max_stops_per_trip", 4) or 4),
+            )
+            validate_consolidated_trips(
+                trips=trips,
+                outcomes=outcomes,
+                distance_map=distance_map,
+                directed_lanes=directed_lanes,
+                as_of_d=as_of_d,
+                carrier_max_load=carrier_max_load,
+                carrier_truck_limits=carrier_truck_limits or None,
+            )
+            shared_trips_count = sum(1 for t in trips if t["stop_count"] > 1)
+            if shared_trips_count > 0:
+                planning_mode = "MODE_B_CONSOLIDATED_TRIPS"
+            for out in outcomes:
+                upd = order_trip_updates.get(out.order_id)
+                if upd:
+                    out.trip_id = upd["trip_code"]
+                    out.stop_sequence = upd["stop_sequence"]
+                    out.carrier = upd["carrier"]
+                    out.distance_km = upd["distance_km"]
+                    out.transit_days = upd["transit_days"]
+                    out.freight_cost_inr = upd["freight_cost_inr"]
+                    for ev in out.evidence:
+                        if ev.get("is_selected"):
+                            ev["carrier_id"] = upd["carrier_id"]
+                            ev["carrier"] = upd["carrier"]
+                            ev["carrier_name"] = upd["carrier"]
+                            ev["freight_cost_inr"] = upd["freight_cost_inr"]
+                            ev["distance_km"] = upd["distance_km"]
+                            ev["transit_days"] = upd["transit_days"]
+                            if upd["stop_count"] > 1:
+                                ev["reason"] = (
+                                    f"Selected on shared trip {upd['trip_code']} (Stop {upd['stop_sequence']} of {upd['stop_count']} "
+                                    f"via {upd['carrier']})."
+                                )
+                    if upd["stop_count"] > 1:
+                        out.explanation = (
+                            f"Assigned {out.allocated_units} {out.keg_size} kegs from {out.source_hub} "
+                            f"(Stop {upd['stop_sequence']} of {upd['stop_count']} on shared trip {upd['trip_code']} "
+                            f"via {upd['carrier']}, {upd['trip_total_kegs']}/{upd['carrier_max_load_kegs']} keg truck load, "
+                            f"{upd['distance_km']} km cumulative / {upd['transit_days']}d transit)."
+                        )
+
         return {
             "solver_status": solver_status_name,
             "planning_mode": planning_mode,
@@ -987,7 +1051,7 @@ class OrToolsFulfillmentPlanner:
             "max_candidates_per_order": self.max_candidates_per_order,
             "omitted_candidates_total": omitted_total,
             "stage2_modified": stage2_modified,
-            "vehicle_mode": "interval_no_overlap" if vehicles else "carrier_max_load_only (no_truck_table)",
+            "vehicle_mode": "multi_order_consolidated_trips" if shared_trips_count > 0 else ("interval_no_overlap" if vehicles else "carrier_max_load_only (no_truck_table)"),
             "distributor_mode": distributor_mode,
             "directed_lanes": directed_lanes,
             "provenance": snapshot.get("provenance", {}),
@@ -1001,6 +1065,9 @@ class OrToolsFulfillmentPlanner:
             "total_on_time_kegs": sum(o.proposed_on_time_units for o in outcomes),
             "total_freight_cost_inr": sum(o.freight_cost_inr for o in outcomes),
             "outcomes": outcomes,
+            "trips": trips,
+            "trips_total": len(trips),
+            "shared_trips_count": shared_trips_count,
             "selected_candidates_count": len(selected_candidates),
         }
 

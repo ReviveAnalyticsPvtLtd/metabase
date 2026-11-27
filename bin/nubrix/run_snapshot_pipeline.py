@@ -125,8 +125,13 @@ def main() -> int:
     parser.add_argument(
         "--carrier-truck-cap",
         type=int,
-        default=300,
-        help="Synthetic max truck dispatches per carrier across horizon (0 = uncapped, default: 300)",
+        default=220,
+        help="Synthetic max truck dispatches per carrier across horizon (0 = uncapped, default: 220)",
+    )
+    parser.add_argument(
+        "--no-consolidate-trips",
+        action="store_true",
+        help="Disable multi-order shared-trip consolidation (default: enabled)",
     )
     parser.add_argument("--publish", action="store_true", help="Actually write run to Railway nubrix_poc_* tables (default: dry-run)")
     args = parser.parse_args()
@@ -152,6 +157,7 @@ def main() -> int:
     snapshot = adapter_result.snapshot
     snapshot["as_of_date"] = str(as_of_d)
     snapshot["directed_lanes"] = True
+    snapshot["consolidate_trips"] = not args.no_consolidate_trips
     if args.carrier_truck_cap and args.carrier_truck_cap > 0:
         snapshot["carrier_truck_limits"] = {
             c["name"]: int(args.carrier_truck_cap)
@@ -268,6 +274,8 @@ def main() -> int:
             "carrier_id": next((c["id"] for c in snapshot.get("carriers", {}).values() if c.get("name") == outcome.carrier), None),
             "distributor_mode": outcome.distributor_mode,
             "omitted_candidates_count": outcome.omitted_candidates_count,
+            "trip_id": outcome.trip_id,
+            "stop_sequence": outcome.stop_sequence,
         })
 
         missing_lane_seen = False
