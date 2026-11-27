@@ -6,7 +6,6 @@ without mutating active Railway tables or the active run pointer.
 
 import argparse
 from collections import Counter
-from copy import deepcopy
 from datetime import datetime, timedelta
 import hashlib
 import json
@@ -79,6 +78,15 @@ def _load_snapshot(args: argparse.Namespace) -> Tuple[Dict[str, Any], Optional[s
     return snap, hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def _copy_mutable_snapshot(snap: Dict[str, Any]) -> Dict[str, Any]:
+    """Copy only mutable collections (orders/stock/carriers) while sharing immutable legs/customers."""
+    out = dict(snap)
+    out["orders"] = [dict(o) for o in snap.get("orders", [])]
+    out["stock"] = [dict(s) for s in snap.get("stock", [])]
+    out["carriers"] = {k: dict(v) for k, v in snap.get("carriers", {}).items()}
+    return out
+
+
 def _diff_outcomes(base_res: Dict[str, Any], alt_res: Dict[str, Any], focus_order_id: Optional[str] = None) -> List[Dict[str, Any]]:
     base_map = {o.order_id: o for o in base_res["outcomes"]}
     affected = []
@@ -143,7 +151,7 @@ def _solve_forced_order(
         max_candidates_per_order=12,
         source_policy=base_policy,
     )
-    base_res = base_planner.plan(deepcopy(base_snap))
+    base_res = base_planner.plan(_copy_mutable_snapshot(base_snap))
 
     target_order = next((o for o in base_snap["orders"] if o["id"] == order_id), None)
     if not target_order:
@@ -178,7 +186,7 @@ def _solve_forced_order(
         return {"ok": False, "feasible": False, "error": f"No verified directed distance lane from {target_source_id} to {dest_id}."}
 
     # Force candidate inside the complete CP-SAT model
-    forced_snap = deepcopy(base_snap)
+    forced_snap = _copy_mutable_snapshot(base_snap)
     forced_snap["forced_assignment"] = {
         order_id: {
             "source_customer_id": target_source_id,
@@ -245,9 +253,9 @@ def _solve_scenario(
         max_candidates_per_order=12,
         source_policy=base_policy,
     )
-    base_res = base_planner.plan(deepcopy(base_snap))
+    base_res = base_planner.plan(_copy_mutable_snapshot(base_snap))
 
-    scen_snap = deepcopy(base_snap)
+    scen_snap = _copy_mutable_snapshot(base_snap)
     scen_policy = base_policy
     title = ""
     assumptions = [

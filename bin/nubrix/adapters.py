@@ -417,18 +417,6 @@ class RailwayWarehouseAdapter:
                         "minutes": minutes,
                         "lane_source": "FreightRoadDistance",
                     })
-                    lanes.append({
-                        "carrier": primary_carrier["name"],
-                        "origin": orig,
-                        "destination": dest,
-                        "coordinator": orig,
-                        "via": None,
-                        "km": km,
-                        "minutes": minutes,
-                        "rate_paise": primary_carrier["rate_paise"],
-                        "handling_minutes": 60,
-                        "lane_source": "FreightRoadDistance",
-                    })
 
                 # Also load any derived synthetic proxy lanes from nubrix_poc_distance_matrix
                 # (never mutates FreightRoadDistance; only fills missing directed pairs)
@@ -455,18 +443,6 @@ class RailwayWarehouseAdapter:
                             "destination": dest,
                             "km": km,
                             "minutes": minutes,
-                            "lane_source": lsrc or "synthetic_haversine_proxy",
-                        })
-                        lanes.append({
-                            "carrier": primary_carrier["name"],
-                            "origin": orig,
-                            "destination": dest,
-                            "coordinator": orig,
-                            "via": None,
-                            "km": km,
-                            "minutes": minutes,
-                            "rate_paise": primary_carrier["rate_paise"],
-                            "handling_minutes": 60,
                             "lane_source": lsrc or "synthetic_haversine_proxy",
                         })
 
@@ -496,7 +472,7 @@ class RailwayWarehouseAdapter:
             "orders_count": len(orders),
             "stock_count": len(stock),
             "customers_count": len(customers),
-            "lanes_count": len(lanes),
+            "lanes_count": len(legs),
             "freight_road_distance_count": frd_count,
             "supplemental_proxy_lanes_count": proxy_count,
         }
