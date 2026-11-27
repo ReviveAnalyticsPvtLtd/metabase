@@ -189,6 +189,7 @@ class OrToolsFulfillmentPlanner:
         handling_days = int(snapshot.get("distributor_handling_days", 0) or 0)
         source_policy = str(snapshot.get("source_policy", self.source_policy) or "depot_first")
         vehicles = list(snapshot.get("vehicles") or [])
+        carrier_truck_limits = dict(snapshot.get("carrier_truck_limits") or {})
         base_date = date(2026, 7, 1)
 
         # Build distributor list by region
@@ -385,7 +386,7 @@ class OrToolsFulfillmentPlanner:
                 trip_start_min = (dispatch_start - base_date).days * 1440
                 trip_end_min = trip_start_min + max(1, transit_days) * 1440
 
-                if not vehicles:
+                if not vehicles and not carrier_truck_limits:
                     sorted_cars = sorted(
                         raw_carriers,
                         key=lambda c: (float(c.get("rate_inr", 2.0)), -int(c.get("max_load", 0) or 0)),
@@ -566,6 +567,15 @@ class OrToolsFulfillmentPlanner:
         # Constraint 3: Vehicle non-overlap when vehicles are modeled
         for intervals in vehicle_intervals.values():
             model.AddNoOverlap(intervals)
+
+        # Constraint 4: Finite carrier truck/dispatch limits when modeled
+        if carrier_truck_limits:
+            carrier_dispatches = defaultdict(list)
+            for c in feasible_candidates:
+                carrier_dispatches[c.carrier_name].append(choice_vars[c.candidate_id])
+            for car_name, max_trucks in carrier_truck_limits.items():
+                if car_name in carrier_dispatches and max_trucks is not None:
+                    model.Add(sum(carrier_dispatches[car_name]) <= int(max_trucks))
 
         # True Staged Lexicographic Optimization:
         # Stage 1: Maximize total feasible, on-time covered kegs

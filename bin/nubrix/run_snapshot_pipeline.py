@@ -122,6 +122,12 @@ def main() -> int:
         help="Historical simulation planning as-of date YYYY-MM-DD (default: 2026-01-02; never substitutes date.today())",
     )
     parser.add_argument("--supplement-lanes", action="store_true", help="Populate nubrix_poc_distance_matrix for missing depot->Brewer pairs")
+    parser.add_argument(
+        "--carrier-truck-cap",
+        type=int,
+        default=300,
+        help="Synthetic max truck dispatches per carrier across horizon (0 = uncapped, default: 300)",
+    )
     parser.add_argument("--publish", action="store_true", help="Actually write run to Railway nubrix_poc_* tables (default: dry-run)")
     args = parser.parse_args()
 
@@ -146,6 +152,12 @@ def main() -> int:
     snapshot = adapter_result.snapshot
     snapshot["as_of_date"] = str(as_of_d)
     snapshot["directed_lanes"] = True
+    if args.carrier_truck_cap and args.carrier_truck_cap > 0:
+        snapshot["carrier_truck_limits"] = {
+            c["name"]: int(args.carrier_truck_cap)
+            for c in snapshot.get("carriers", {}).values()
+        }
+        snapshot["provenance"]["carrier_truck_cap"] = int(args.carrier_truck_cap)
     total_open_orders = len(snapshot["orders"])
     # Scope planning horizon to earliest-due open orders for fast, bounded CP-SAT execution
     snapshot["orders"] = snapshot["orders"][:args.horizon]
