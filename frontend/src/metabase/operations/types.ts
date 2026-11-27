@@ -160,10 +160,29 @@ export interface TripStopItem {
   is_current_order?: boolean;
 }
 
+export interface AllocationLineItem {
+  line_id: string;
+  line_seq: number;
+  source_customer_id: string;
+  source_name: string;
+  source_role: string;
+  carrier: string;
+  allocated_units: number;
+  distance_km: number;
+  freight_cost_inr: number;
+  transit_days: number;
+  trip_code?: string | null;
+  stop_sequence?: number | null;
+  src_lat?: number | null;
+  src_lng?: number | null;
+  src_city?: string | null;
+}
+
 export interface OrderDetailResponse {
   order: OrderDetailItem;
   trip?: TripSummary | null;
   trip_stops?: TripStopItem[];
+  allocation_lines?: AllocationLineItem[];
   consistency_check?: ConsistencyCheck;
   planning_policy?: PlanningPolicy;
   run: OperationsRunSummary;

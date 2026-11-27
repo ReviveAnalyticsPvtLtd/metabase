@@ -291,6 +291,44 @@ class ExplainabilityAuditTests(unittest.TestCase):
         self.assertEqual(trip["stops"][1]["load_before_stop_kegs"], 100)
         self.assertEqual(trip["stops"][1]["load_after_stop_kegs"], 0)
 
+    def test_cost_service_optimal_splits_nearby_when_cheaper_than_far_depot(self):
+        snap = _sample_snapshot()
+        snap["as_of_date"] = "2026-01-02"
+        snap["directed_lanes"] = True
+        snap["consolidate_trips"] = True
+        # Two nearby Brewers (10km, 15km) holding 250 + 150 = 400 kegs vs 1 far Depot (500km) holding 500 kegs
+        snap["customers"]["CUST-MAINT-FAR"] = {
+            "id": "CUST-MAINT-FAR", "name": "Far Maint Depot", "type": "Maintenance Facility",
+            "region": "South", "city": "Chennai", "lat": 13.08, "lon": 80.27,
+        }
+        snap["stock"] = [
+            {"source": "CUST-NEAR", "sku": "50L", "available": 250},
+            {"source": "CUST-FAR", "sku": "50L", "available": 150},
+            {"source": "CUST-MAINT-FAR", "sku": "50L", "available": 500},
+        ]
+        snap["legs"] = [
+            {"origin": "CUST-NEAR", "destination": "CUST-DEST", "km": 10},
+            {"origin": "CUST-FAR", "destination": "CUST-DEST", "km": 15},
+            {"origin": "CUST-MAINT-FAR", "destination": "CUST-DEST", "km": 500},
+        ]
+        snap["orders"] = [
+            {
+                "id": "ORD-SPLIT", "customer_id": "CUST-DEST", "sku": "50L",
+                "ordered_date": "2026-01-01", "needed_by_date": "2026-01-10",
+                "quantity_ordered": 400, "fulfilled_units": 0, "pending": 400,
+            }
+        ]
+        planner = OrToolsFulfillmentPlanner(
+            time_limit_seconds=10, max_candidates_per_order=12, source_policy="cost_service_optimal"
+        )
+        res = planner.plan(snap)
+        out = res["outcomes"][0]
+        self.assertEqual(out.allocated_units, 400)
+        self.assertEqual(out.uncovered_units, 0)
+        self.assertEqual(len(out.allocation_lines), 2)
+        # 250*10*1.65 + 150*15*1.65 = 4125 + 3712.5 = 7837.50 INR (vs 400*500*1.65 = 330,000 INR!)
+        self.assertAlmostEqual(out.freight_cost_inr, 7837.50, places=2)
+
 
 if __name__ == "__main__":
     unittest.main()

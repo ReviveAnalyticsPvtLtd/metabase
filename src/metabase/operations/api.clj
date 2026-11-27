@@ -38,11 +38,12 @@
 (defn- source-policy-label
   [policy]
   (case (str policy)
+    "cost_service_optimal"   "Cost & Service Optimal — multi-source splits & shared trips"
     "service_first_fallback" "Service-First Fallback — Facility > Distributor > Brewer"
     "depot_first"            "Depot-First — approved facilities and distributors"
     "unrestricted_nearest"   "Unrestricted nearest-source — benchmark only"
     "approved_peer_brewer"   "Approved peer-Brewer transfer — exception scenario"
-    "Service-First Fallback — Facility > Distributor > Brewer"))
+    "Cost & Service Optimal — multi-source splits & shared trips"))
 
 (defn- check-operations-access!
   "Verify authenticated user has read access to the MicroStar Railway database before any query."
@@ -470,6 +471,19 @@
                            (and nb aod (neg? (compare nb aod))))
           deadline-feasible? (and (= "Y" (:on_time_feasible row)) (not overdue-as-of?))
           trip-code  (:trip_id row)
+          alloc-lines (let [catalog (customer-catalog-by-id)
+                            raw-lines (run-native-query
+                                       "SELECT * FROM nubrix_poc_allocation_lines
+                                        WHERE run_id = ? AND order_id = ?
+                                        ORDER BY line_seq ASC"
+                                       [pinned order-id])]
+                        (mapv (fn [ln]
+                                (let [sc (get catalog (:source_customer_id ln))]
+                                  (assoc ln
+                                         :src_lat (:Latitude sc)
+                                         :src_lng (:Longitude sc)
+                                         :src_city (:ShippingCity sc))))
+                              raw-lines))
           trip-row   (when (and (pos? proposed) (seq trip-code))
                        (first (run-native-query
                                "SELECT * FROM nubrix_poc_trips WHERE run_id = ? AND trip_code = ? LIMIT 1"
@@ -556,6 +570,7 @@
                                        :basis (if overdue-as-of? "overdue vs planning as-of" "modeled")}])
        :trip        trip-row
        :trip_stops  (or trip-stops [])
+       :allocation_lines (or alloc-lines [])
        :quantity_reconciliation {:ordered ordered
                                  :fulfilled fulfilled
                                  :pending pending

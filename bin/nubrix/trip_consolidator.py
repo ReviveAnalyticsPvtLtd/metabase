@@ -83,6 +83,7 @@ def _evaluate_trip_sequence(
 
         stops.append({
             "stop_sequence": idx,
+            "line_id": o["line_id"],
             "order_id": o["order_id"],
             "destination_customer_id": dest_id,
             "destination_name": dest_name,
@@ -182,37 +183,53 @@ def consolidate_trips_cpsat(
         return [], {}
 
     max_carrier_cap = max(int(c["max_load"]) for c in carrier_list)
-    by_order_raw: Dict[str, Any] = {}
-    orders_by_source: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    by_line_raw: Dict[str, Any] = {}
+    lines_by_source: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
 
     for out in outcomes:
-        if out.allocated_units <= 0 or not out.source_customer_id:
+        if out.allocated_units <= 0:
             continue
-        by_order_raw[out.order_id] = out
+        lines = getattr(out, "allocation_lines", None) or []
+        if not lines and out.source_customer_id:
+            lines = [{
+                "line_id": f"{out.order_id}#S1",
+                "order_id": out.order_id,
+                "source_customer_id": out.source_customer_id,
+                "allocated_units": int(out.allocated_units),
+                "distance_km": int(out.distance_km),
+            }]
         ord_d = date.fromisoformat(str(out.ordered_date)[:10])
         nb_d = date.fromisoformat(str(out.needed_by)[:10])
         dest_cust = customers.get(out.destination_customer_id, {})
-        orders_by_source[out.source_customer_id].append({
-            "order_id": out.order_id,
-            "source_customer_id": out.source_customer_id,
-            "destination_customer_id": out.destination_customer_id,
-            "destination_brewer": out.destination_brewer,
-            "region": out.region,
-            "city": dest_cust.get("city", ""),
-            "keg_size": out.keg_size,
-            "ordered_date": str(out.ordered_date)[:10],
-            "needed_by": str(out.needed_by)[:10],
-            "ordered_date_d": ord_d,
-            "needed_by_d": nb_d,
-            "allocated_units": int(out.allocated_units),
-            "base_distance_km": int(out.distance_km),
-        })
+        for idx_l, ln in enumerate(lines, start=1):
+            qty_l = int(ln["allocated_units"])
+            src_l = ln["source_customer_id"]
+            if qty_l <= 0 or not src_l:
+                continue
+            lid = ln.get("line_id") or f"{out.order_id}#S{idx_l}"
+            by_line_raw[lid] = (out, ln)
+            lines_by_source[src_l].append({
+                "line_id": lid,
+                "order_id": out.order_id,
+                "source_customer_id": src_l,
+                "destination_customer_id": out.destination_customer_id,
+                "destination_brewer": out.destination_brewer,
+                "region": out.region,
+                "city": dest_cust.get("city", ""),
+                "keg_size": out.keg_size,
+                "ordered_date": str(out.ordered_date)[:10],
+                "needed_by": str(out.needed_by)[:10],
+                "ordered_date_d": ord_d,
+                "needed_by_d": nb_d,
+                "allocated_units": qty_l,
+                "base_distance_km": int(ln.get("distance_km", out.distance_km)),
+            })
 
-    if not by_order_raw:
+    if not by_line_raw:
         return [], {}
 
     candidate_trips: List[Dict[str, Any]] = []
-    trips_covering_order: Dict[str, List[int]] = defaultdict(list)
+    trips_covering_line: Dict[str, List[int]] = defaultdict(list)
 
     def _add_trip_candidate(
         src_id: str,
@@ -222,10 +239,11 @@ def consolidate_trips_cpsat(
         car: Dict[str, Any],
     ) -> None:
         tid = len(candidate_trips)
+        line_ids = [s["line_id"] for s in seq_eval["stops"]]
         order_ids = [s["order_id"] for s in seq_eval["stops"]]
-        # Estimate earliest common dispatch date across stops in trip
+        line_set = set(line_ids)
         dispatch_d = max(
-            [o["ordered_date_d"] for o in (orders_by_source[src_id]) if o["order_id"] in set(order_ids)]
+            [o["ordered_date_d"] for o in (lines_by_source[src_id]) if o["line_id"] in line_set]
             + ([as_of_d] if as_of_d else [])
         )
         max_load = int(car["max_load"])
@@ -247,15 +265,16 @@ def consolidate_trips_cpsat(
             "total_freight_paise": seq_eval["total_freight_paise"],
             "total_freight_inr": seq_eval["total_freight_inr"],
             "dispatch_date": str(dispatch_d),
+            "line_ids": line_ids,
             "order_ids": order_ids,
             "stops": seq_eval["stops"],
         }
         candidate_trips.append(trip_obj)
-        for oid in order_ids:
-            trips_covering_order[oid].append(tid)
+        for lid in line_ids:
+            trips_covering_line[lid].append(tid)
 
     # Generate 1-stop direct trips AND 2..4-stop consolidated trips per source
-    for src_id, src_orders in orders_by_source.items():
+    for src_id, src_orders in lines_by_source.items():
         src_cust = customers.get(src_id, {})
         src_name = src_cust.get("name", src_id)
         src_role = src_cust.get("type", "Unknown")
@@ -271,18 +290,17 @@ def consolidate_trips_cpsat(
                 if ev is not None:
                     _add_trip_candidate(src_id, src_name, src_role, ev, car)
 
-        # 2. Cluster orders at this source by proximity & delivery window to build 2..max_stops multi-order trips
+        # 2. Cluster lines at this source by proximity & delivery window to build 2..max_stops multi-order trips
         sorted_src_orders = sorted(
             src_orders,
-            key=lambda x: (x["needed_by_d"], x["region"], x["city"], -x["allocated_units"], x["order_id"]),
+            key=lambda x: (x["needed_by_d"], x["region"], x["city"], -x["allocated_units"], x["line_id"]),
         )
-        seen_order_sets = set()
+        seen_line_sets = set()
         for idx_a, o_a in enumerate(sorted_src_orders):
-            # Find nearby neighbors with compatible due-date window (+/- 3 days) and remaining truck headroom
             neighbors = []
             dest_a = customers.get(o_a["destination_customer_id"], {})
             for idx_b, o_b in enumerate(sorted_src_orders):
-                if idx_b <= idx_a:
+                if idx_b <= idx_a or o_b["order_id"] == o_a["order_id"]:
                     continue
                 if abs((o_b["needed_by_d"] - o_a["needed_by_d"]).days) > 3:
                     continue
@@ -291,51 +309,51 @@ def consolidate_trips_cpsat(
                 dest_b = customers.get(o_b["destination_customer_id"], {})
                 km_ab = _haversine_km_approx(dest_a, dest_b)
                 neighbors.append((km_ab, o_b))
-            neighbors.sort(key=lambda x: (x[0], x[1]["needed_by_d"], x[1]["order_id"]))
+            neighbors.sort(key=lambda x: (x[0], x[1]["needed_by_d"], x[1]["line_id"]))
 
-            # Generate 2-stop pairs (top 6 closest compatible neighbors)
             top_neighbors = [nb for _km, nb in neighbors[:6]]
             for o_b in top_neighbors:
                 grp2 = [o_a, o_b]
-                key2 = tuple(sorted(x["order_id"] for x in grp2))
-                if key2 in seen_order_sets:
+                key2 = tuple(sorted(x["line_id"] for x in grp2))
+                if key2 in seen_line_sets:
                     continue
-                seen_order_sets.add(key2)
+                seen_line_sets.add(key2)
                 comb_qty2 = sum(x["allocated_units"] for x in grp2)
-                # Direct keg-km baseline sum (to filter obviously wasteful detours)
                 direct_keg_km2 = sum(x["allocated_units"] * x["base_distance_km"] for x in grp2)
                 base_ev2 = _find_best_trip_sequence(
                     src_id, src_name, grp2, customers, distance_map, directed_lanes, as_of_d, 1.0
                 )
                 if base_ev2 is None:
                     continue
-                # Keep consolidations that don't increase physical keg-km beyond 25% (saves 1 full truck)
                 if base_ev2["total_keg_km"] <= max(direct_keg_km2 * 1.25, direct_keg_km2 + 500):
                     for car in carrier_list:
                         if int(car["max_load"]) >= comb_qty2:
                             ev_c = _evaluate_trip_sequence(
                                 src_id, src_name,
-                                [next(x for x in grp2 if x["order_id"] == s["order_id"]) for s in base_ev2["stops"]],
+                                [next(x for x in grp2 if x["line_id"] == s["line_id"]) for s in base_ev2["stops"]],
                                 customers, distance_map, directed_lanes, as_of_d, float(car["rate_inr"])
                             )
                             if ev_c is not None:
                                 _add_trip_candidate(src_id, src_name, src_role, ev_c, car)
 
-            # Generate greedy 3-stop & 4-stop packs around o_a
             if max_stops_per_trip >= 3 and len(top_neighbors) >= 2:
                 pack = [o_a]
                 pack_qty = o_a["allocated_units"]
+                pack_orders = {o_a["order_id"]}
                 for o_n in top_neighbors:
                     if len(pack) >= max_stops_per_trip:
                         break
+                    if o_n["order_id"] in pack_orders:
+                        continue
                     if pack_qty + o_n["allocated_units"] <= max_carrier_cap:
                         pack.append(o_n)
                         pack_qty += o_n["allocated_units"]
+                        pack_orders.add(o_n["order_id"])
                         if len(pack) >= 3:
-                            key_p = tuple(sorted(x["order_id"] for x in pack))
-                            if key_p in seen_order_sets:
+                            key_p = tuple(sorted(x["line_id"] for x in pack))
+                            if key_p in seen_line_sets:
                                 continue
-                            seen_order_sets.add(key_p)
+                            seen_line_sets.add(key_p)
                             direct_keg_km_p = sum(x["allocated_units"] * x["base_distance_km"] for x in pack)
                             base_ev_p = _find_best_trip_sequence(
                                 src_id, src_name, list(pack), customers, distance_map, directed_lanes, as_of_d, 1.0
@@ -345,7 +363,7 @@ def consolidate_trips_cpsat(
                                     if int(car["max_load"]) >= pack_qty:
                                         ev_pc = _evaluate_trip_sequence(
                                             src_id, src_name,
-                                            [next(x for x in pack if x["order_id"] == s["order_id"]) for s in base_ev_p["stops"]],
+                                            [next(x for x in pack if x["line_id"] == s["line_id"]) for s in base_ev_p["stops"]],
                                             customers, distance_map, directed_lanes, as_of_d, float(car["rate_inr"])
                                         )
                                         if ev_pc is not None:
@@ -355,8 +373,8 @@ def consolidate_trips_cpsat(
     model = cp_model.CpModel()
     y_vars = [model.NewBoolVar(f"trip_{t['cand_trip_id']}") for t in candidate_trips]
 
-    # Exactly one trip serves each covered order
-    for oid, tids in trips_covering_order.items():
+    # Exactly one trip serves each covered shipment line
+    for lid, tids in trips_covering_line.items():
         model.Add(sum(y_vars[t] for t in tids) == 1)
 
     # Carrier truck dispatch caps (when configured)
@@ -368,9 +386,10 @@ def consolidate_trips_cpsat(
             if car_name in by_car and max_trucks is not None:
                 model.Add(sum(by_car[car_name]) <= int(max_trucks))
 
-    # Minimize total physical freight (paise) + tiny 100-paise (₹1) consolidation tie-breaker per truck dispatch
+    # Minimize total physical freight (paise) + ₹500 implicit truck-saving incentive per trip dispatch
+    # (so consolidations that use 1 fewer truck win cleanly without inventing money in displayed freight!)
     total_obj = sum(
-        (t["total_freight_paise"] + 100) * y_vars[t["cand_trip_id"]]
+        (t["total_freight_paise"] + 50_000) * y_vars[t["cand_trip_id"]]
         for t in candidate_trips
     )
     model.Minimize(total_obj)
@@ -380,25 +399,23 @@ def consolidate_trips_cpsat(
     solver.parameters.max_time_in_seconds = max(5.0, float(time_limit_seconds))
     status = solver.Solve(model)
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        # Return empty if infeasible (caller can handle or fail closed)
         raise RuntimeError(
             f"Multi-order trip consolidation failed with status {solver.StatusName(status)} (check carrier truck caps)"
         )
 
     selected_trips: List[Dict[str, Any]] = []
-    order_trip_updates: Dict[str, Dict[str, Any]] = {}
+    line_trip_updates: Dict[str, Dict[str, Any]] = {}
     for t in candidate_trips:
         if solver.Value(y_vars[t["cand_trip_id"]]) == 1:
             t_out = dict(t)
             selected_trips.append(t_out)
 
-    # Sort trips deterministically and assign clean TR-0001.. numbers
-    selected_trips.sort(key=lambda x: (-x["stop_count"], x["source_customer_id"], x["order_ids"][0]))
+    selected_trips.sort(key=lambda x: (-x["stop_count"], x["source_customer_id"], x["line_ids"][0]))
     for idx, t in enumerate(selected_trips, start=1):
         trip_code = f"TRP-{idx:04d}"
         t["trip_code"] = trip_code
         for st in t["stops"]:
-            order_trip_updates[st["order_id"]] = {
+            line_trip_updates[st["line_id"]] = {
                 "trip_code": trip_code,
                 "stop_sequence": st["stop_sequence"],
                 "stop_count": t["stop_count"],
@@ -411,7 +428,7 @@ def consolidate_trips_cpsat(
                 "carrier_max_load_kegs": t["carrier_max_load_kegs"],
             }
 
-    return selected_trips, order_trip_updates
+    return selected_trips, line_trip_updates
 
 
 def validate_consolidated_trips(
@@ -425,8 +442,19 @@ def validate_consolidated_trips(
 ) -> None:
     """Independently validate every consolidated trip, stop sequence, capacity, leg distance, deadline, and freight total."""
     outcome_by_id = {o.order_id: o for o in outcomes}
-    covered_orders_expected = {o.order_id for o in outcomes if o.allocated_units > 0}
-    seen_orders = set()
+    expected_line_qtys: Dict[str, int] = {}
+    for o in outcomes:
+        if o.allocated_units <= 0:
+            continue
+        lines = getattr(o, "allocation_lines", None) or []
+        if not lines and o.source_customer_id:
+            expected_line_qtys[f"{o.order_id}#S1"] = int(o.allocated_units)
+        else:
+            for idx_l, ln in enumerate(lines, start=1):
+                if int(ln["allocated_units"]) > 0:
+                    expected_line_qtys[ln.get("line_id") or f"{o.order_id}#S{idx_l}"] = int(ln["allocated_units"])
+
+    seen_lines = set()
     carrier_dispatch_counts: Dict[str, int] = defaultdict(int)
 
     for t in trips:
@@ -446,13 +474,15 @@ def validate_consolidated_trips(
         for idx, st in enumerate(stops, start=1):
             if st["stop_sequence"] != idx:
                 raise ValueError(f"Trip {t.get('trip_code')} non-contiguous stop_sequence {st['stop_sequence']}")
+            lid = st.get("line_id") or f"{st['order_id']}#S1"
             oid = st["order_id"]
-            if oid in seen_orders:
-                raise ValueError(f"Order {oid} assigned to multiple trips")
-            seen_orders.add(oid)
+            if lid in seen_lines:
+                raise ValueError(f"Shipment line {lid} assigned to multiple trips")
+            seen_lines.add(lid)
+            exp_qty = expected_line_qtys.get(lid)
             o = outcome_by_id.get(oid)
-            if not o or o.allocated_units != st["kegs_delivered"]:
-                raise ValueError(f"Order {oid} kegs mismatch with trip stop")
+            if not o or exp_qty is None or exp_qty != st["kegs_delivered"]:
+                raise ValueError(f"Shipment line {lid} kegs mismatch with trip stop")
             if st["load_before_stop_kegs"] != rem:
                 raise ValueError(f"Trip {t.get('trip_code')} stop {idx} load_before mismatch")
 
@@ -491,9 +521,9 @@ def validate_consolidated_trips(
         if abs(stops_freight - float(t["total_freight_inr"])) > 0.05:
             raise ValueError(f"Trip {t.get('trip_code')} stop freight allocation mismatch")
 
-    if seen_orders != covered_orders_expected:
-        missing = covered_orders_expected - seen_orders
-        raise ValueError(f"Consolidated trips missing {len(missing)} covered order(s)")
+    if seen_lines != set(expected_line_qtys.keys()):
+        missing = set(expected_line_qtys.keys()) - seen_lines
+        raise ValueError(f"Consolidated trips missing {len(missing)} shipment line(s)")
 
     if carrier_truck_limits:
         for car_name, cnt in carrier_dispatch_counts.items():
