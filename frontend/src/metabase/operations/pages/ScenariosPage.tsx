@@ -308,6 +308,22 @@ export function ScenariosPage() {
               </Box>
             </Flex>
 
+            {simLoading && (
+              <Box
+                p="sm"
+                mt="md"
+                style={{
+                  border: "1px solid #1967D2",
+                  backgroundColor: "#E8F0FE",
+                  borderRadius: 6,
+                }}
+              >
+                <Text size="sm" fw={600} style={{ color: "#1967D2" }}>
+                  {t`Re-optimizing full 1,000-order network for this scenario (may take up to 30 seconds)...`}
+                </Text>
+              </Box>
+            )}
+
             {simResult && (
               <Box
                 p="md"

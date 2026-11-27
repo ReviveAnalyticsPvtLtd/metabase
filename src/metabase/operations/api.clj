@@ -623,7 +623,7 @@
                    "--order-id" order-id
                    "--source-customer-id" (str (:source_customer_id cand))
                    "--carrier" (str (:carrier_name cand))
-                   "--time-limit" "10"])]
+                   "--time-limit" "25"])]
     (if (:ok solved)
       {:order_id                 order-id
        :candidate_route_id       cand-id
@@ -684,7 +684,7 @@
                         "--order-id" order-id
                         "--source-customer-id" source_customer_id
                         "--carrier" carrier
-                        "--time-limit" "10"]
+                        "--time-limit" "25"]
                  quantity (into ["--quantity" (str quantity)]))
         solved (run-what-if-solver db args)]
     (assoc solved
@@ -870,7 +870,7 @@
                         "--horizon" (str (:horizon_orders run))
                         "--source-policy" (str (or (:source_policy run) "service_first_fallback"))
                         "--scenario-type" scenario_type
-                        "--time-limit" "12"]
+                        "--time-limit" "25"]
                  disabled_carrier    (into ["--disabled-carrier" disabled_carrier])
                  stock_pct           (into ["--stock-pct" (str stock_pct)])
                  deadline_days_delta (into ["--deadline-days-delta" (str deadline_days_delta)]))

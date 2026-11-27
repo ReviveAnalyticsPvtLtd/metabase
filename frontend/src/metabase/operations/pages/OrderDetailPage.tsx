@@ -531,7 +531,7 @@ export function OrderDetailPage() {
             }}
           >
             <Text size="sm" fw={600} style={{ color: "#1967D2" }}>
-              {t`Running counterfactual trade-off analysis for selected candidate...`}
+              {t`Re-optimizing network plan to measure exact trade-offs (may take up to 30 seconds)...`}
             </Text>
           </Box>
         )}
