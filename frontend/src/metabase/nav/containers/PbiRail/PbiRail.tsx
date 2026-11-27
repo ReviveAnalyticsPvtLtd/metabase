@@ -276,34 +276,49 @@ export function PbiRail({ isOpen }: { isOpen: boolean }) {
               >
                 {t`Home`}
               </PaddedSidebarLink>
+
+              <SidebarHeading px="var(--mantine-spacing-md)" mt="sm" mb={4}>
+                {t`Supply Chain Ops`}
+              </SidebarHeading>
               <PaddedSidebarLink
                 icon="dashboard"
                 url="/dashboard/23"
                 isSelected={isSelectedUrl("/dashboard/23") || isSelectedUrl("/operations/overview")}
               >
-                {t`Overview`}
+                {t`Control Tower`}
               </PaddedSidebarLink>
               <PaddedSidebarLink
-                icon="table"
+                icon="location"
                 url="/operations/orders"
                 isSelected={isSelectedUrl("/operations/orders")}
               >
-                {t`Orders`}
+                {t`Order Fulfillment`}
               </PaddedSidebarLink>
               <PaddedSidebarLink
                 icon="warning"
                 url="/operations/exceptions"
                 isSelected={isSelectedUrl("/operations/exceptions")}
               >
-                {t`Exceptions`}
+                {t`Exceptions Triage`}
               </PaddedSidebarLink>
               <PaddedSidebarLink
                 icon="folder"
                 url="/operations/inventory"
                 isSelected={isSelectedUrl("/operations/inventory")}
               >
-                {t`Inventory`}
+                {t`Network Inventory`}
               </PaddedSidebarLink>
+              <PaddedSidebarLink
+                icon="play"
+                url="/operations/scenarios"
+                isSelected={isSelectedUrl("/operations/scenarios")}
+              >
+                {t`Scenario Lab`}
+              </PaddedSidebarLink>
+
+              <SidebarHeading px="var(--mantine-spacing-md)" mt="md" mb={4}>
+                {t`BI & Analytics`}
+              </SidebarHeading>
               <PaddedSidebarLink
                 icon="bar"
                 url="/collection/root"
@@ -332,14 +347,20 @@ export function PbiRail({ isOpen }: { isOpen: boolean }) {
               >
                 {t`Metrics`}
               </PaddedSidebarLink>
+
               {hasMetabotAccess && (
-                <PaddedSidebarLink
-                  icon="insight"
-                  isSelected={metabot.visible}
-                  onClick={handleMetabotClick}
-                >
-                  {t`Chat with ${metabotName}`}
-                </PaddedSidebarLink>
+                <>
+                  <SidebarHeading px="var(--mantine-spacing-md)" mt="md" mb={4}>
+                    {t`AI Copilot`}
+                  </SidebarHeading>
+                  <PaddedSidebarLink
+                    icon="insight"
+                    isSelected={metabot.visible}
+                    onClick={handleMetabotClick}
+                  >
+                    {t`Chat with ${metabotName}`}
+                  </PaddedSidebarLink>
+                </>
               )}
             </ErrorBoundary>
           </SidebarSection>

@@ -150,9 +150,15 @@ def _resolve_route_legs(
 class OrToolsFulfillmentPlanner:
     """Enterprise-grade, order-driven CP-SAT fulfillment optimizer."""
 
-    def __init__(self, time_limit_seconds: int = 15, max_candidates_per_order: int = 20):
+    def __init__(
+        self,
+        time_limit_seconds: int = 15,
+        max_candidates_per_order: int = 20,
+        source_policy: str = "depot_first",
+    ):
         self.time_limit_seconds = time_limit_seconds
         self.max_candidates_per_order = max_candidates_per_order
+        self.source_policy = source_policy
 
     def plan(self, snapshot: Dict[str, Any]) -> Dict[str, Any]:
         """Execute complete optimization workflow with candidate generation, CP-SAT solve, and validation."""
@@ -181,6 +187,7 @@ class OrToolsFulfillmentPlanner:
         directed_lanes = bool(snapshot.get("directed_lanes", False))
         distributor_mode = str(snapshot.get("distributor_mode", "coordinator"))
         handling_days = int(snapshot.get("distributor_handling_days", 0) or 0)
+        source_policy = str(snapshot.get("source_policy", self.source_policy) or "depot_first")
         vehicles = list(snapshot.get("vehicles") or [])
         base_date = date(2026, 7, 1)
 
@@ -237,19 +244,64 @@ class OrToolsFulfillmentPlanner:
                 })
                 continue
 
-            # Identify candidate sources holding this SKU
-            eligible_sources = [
+            # Identify candidate sources holding this SKU and enforce source eligibility policy
+            all_stock_sources = [
                 (src_id, avail)
                 for (src_id, s_sku), avail in stock_by_source_sku.items()
                 if s_sku == sku and avail > 0 and src_id != dest_id
             ]
 
-            if not eligible_sources:
+            if not all_stock_sources:
                 evidence_by_order[oid].append({
                     "reason": "no_stock_for_sku",
                     "details": f"No facility currently holds available inventory for {sku}",
                 })
                 continue
+
+            if source_policy == "depot_first":
+                eligible_roles = {"Maintenance Facility", "Distributor"}
+                eligible_sources = [
+                    (src_id, avail)
+                    for src_id, avail in all_stock_sources
+                    if customers.get(src_id, {}).get("type") in eligible_roles
+                ]
+                excluded_peers = [
+                    (src_id, avail)
+                    for src_id, avail in all_stock_sources
+                    if customers.get(src_id, {}).get("type") == "Brewer"
+                ]
+                # Record up to 2 nearest excluded peer Brewers in evidence for transparency
+                peer_with_km = []
+                for p_id, p_avail in excluded_peers:
+                    p_km = _resolve_lane_km(distance_map, p_id, dest_id, directed_lanes=directed_lanes)
+                    if p_km is not None:
+                        peer_with_km.append((p_id, p_avail, p_km))
+                peer_with_km.sort(key=lambda x: x[2])
+                for p_id, p_avail, p_km in peer_with_km[:2]:
+                    p_name = customers.get(p_id, {}).get("name", p_id)
+                    evidence_by_order[oid].append({
+                        "reason": "Not eligible under the Depot-First policy. Available only in the approved peer-transfer scenario.",
+                        "reason_code": "POLICY_EXCLUDED_PEER_BREWER",
+                        "source_customer_id": p_id,
+                        "source": p_name,
+                        "source_name": p_name,
+                        "carrier_id": "CAR-NONE",
+                        "carrier": "Unassigned",
+                        "carrier_name": "Unassigned",
+                        "distance_km": p_km,
+                        "candidate_quantity": min(pending_qty, p_avail),
+                        "stock_available_kegs": p_avail,
+                        "is_feasible": False,
+                        "details": "Peer Brewer excluded by Depot-First source eligibility constraint.",
+                    })
+                if not eligible_sources:
+                    evidence_by_order[oid].append({
+                        "reason": "policy_no_eligible_depot",
+                        "details": f"No approved Maintenance Facility or Distributor holds available {sku} inventory under Depot-First policy",
+                    })
+                    continue
+            else:
+                eligible_sources = all_stock_sources
 
             # Find matching distributor
             dist_list = distributors_by_region.get(dest_region, [])
@@ -291,7 +343,15 @@ class OrToolsFulfillmentPlanner:
             if not sources_with_dist:
                 continue
 
-            sources_with_dist.sort(key=lambda s: s[2])
+            def _source_sort_key(item: Tuple[str, int, int, List[Tuple[str, str, int]]]) -> Tuple[int, int]:
+                s_id, _, s_km, _ = item
+                s_type = customers.get(s_id, {}).get("type", "")
+                if source_policy in ("depot_first", "approved_peer_brewer"):
+                    tier = 0 if s_type == "Maintenance Facility" else (1 if s_type == "Distributor" else 2)
+                    return (tier, s_km)
+                return (0, s_km)
+
+            sources_with_dist.sort(key=_source_sort_key)
             if len(sources_with_dist) > self.max_candidates_per_order:
                 candidates_truncated = True
                 omitted_by_order[oid] = len(sources_with_dist) - self.max_candidates_per_order
@@ -473,7 +533,7 @@ class OrToolsFulfillmentPlanner:
             (int(round(c.distance_km * c.cost_per_keg_km * PAISE_PER_INR)) for c in feasible_candidates),
             default=0,
         )
-        vol_weight = max_per_keg_paise + 10_000
+        vol_weight = max(100_000, max_per_keg_paise * 2 + 10_000)
         order_weight = vol_weight * 10
 
         primary_obj = (
@@ -802,6 +862,7 @@ class OrToolsFulfillmentPlanner:
         return {
             "solver_status": solver_status_name,
             "planning_mode": planning_mode,
+            "source_policy": source_policy,
             "objective_policy": objective_policy,
             "split_policy": split_policy,
             "max_candidates_per_order": self.max_candidates_per_order,

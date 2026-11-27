@@ -119,8 +119,6 @@ ORDER BY CustomerType, Region, CustomerName;
 def build_card_142_ledger_query() -> Dict[str, Any]:
     query = """
 SELECT 
-  a.allocation_id AS Alloc_ID,
-  a.run_id AS Run_ID,
   a.order_id AS Order_ID,
   a.destination_brewer AS Destination_Brewer,
   a.region AS Region,
@@ -208,7 +206,6 @@ def build_kpi_strip_query() -> Dict[str, Any]:
     """Phase 3 KPI strip with explicit denominators from the active POC run."""
     query = """
 SELECT
-  r.run_id AS Active_Run_ID,
   r.as_of_date AS As_Of_Date,
   COUNT(*) AS Horizon_Orders,
   SUM(a.pending_units) AS Open_Demand_Kegs,
@@ -222,7 +219,7 @@ JOIN nubrix_poc_runs r ON r.run_id = a.run_id
 WHERE 1=1
 [[AND a.region = {{region}}]]
 [[AND a.customer = {{customer}}]]
-GROUP BY r.run_id, r.as_of_date;
+GROUP BY r.as_of_date;
 """.strip().replace("a.customer = {{customer}}", "(a.destination_brewer = {{customer}} OR a.source_hub = {{customer}} OR a.distributor = {{customer}})")
     return {
         "query": query,
@@ -429,8 +426,8 @@ def update_cards(token: str, apply_changes: bool = False) -> None:
         ),
         (
             142,
-            "Fulfillment Dispatch & Feasibility Ledger (Active OR-Tools Run)",
-            "Order-driven fulfillment ledger from active nubrix_poc_allocations run showing destination brewer, coordinating distributor, source depot, road distance, freight cost, transit days, shortfall, and explanation.",
+            "Fulfillment Dispatch & Feasibility Ledger",
+            "Order-driven fulfillment ledger showing destination brewer, coordinating distributor, source depot, road distance, freight cost, transit days, shortfall, and explanation.",
             "table",
             build_card_142_ledger_query(),
             {
@@ -462,8 +459,8 @@ def update_cards(token: str, apply_changes: bool = False) -> None:
         ),
         (
             145,
-            "Carrier Freight Volume & Delivery Feasibility (Active OR-Tools Run)",
-            "Logistics partner workload, road distances, freight expenditure, and deadline feasibility rate for the active nubrix_poc_allocations run.",
+            "Carrier Freight Volume & Delivery Feasibility",
+            "Logistics partner workload, road distances, freight expenditure, and deadline feasibility rate.",
             "table",
             build_card_145_carrier_query(),
             {},
@@ -778,13 +775,30 @@ def configure_dashboard_layout_and_wiring(token: str, extra_cards: Optional[Dict
             dc["size_y"] = 2
             dc["col"] = 0
             dc["row"] = 0
-            banner_text = (
-                "# MicroStar Keg Fulfillment Control Tower\n"
-                "**Simulated scenario · Proposed plan — not a booking** · "
-                "Mode A (order-level single-source allocation) · Showing the current planning horizon: **1,000** orders of 9,899 open orders (**62,230** proposed kegs, **₹11,626,115** estimated freight). "
-                "Open **[Orders Workspace](/operations/orders)** or **[Exceptions Queue](/operations/exceptions)** to inspect individual order plans, trade-offs, and alternatives. "
-                "*Synthetic road/cost proxies; Railway has no Truck or InventoryReservation table.*"
-            )
+            try:
+                ov = api_request("GET", "/api/operations/overview", token)
+                ov_run = ov.get("run", {})
+                ov_kpis = ov.get("kpis", {})
+                h_orders = int(ov_run.get("horizon_orders") or ov_kpis.get("horizon_orders") or 1000)
+                t_open = int(ov_run.get("total_open_orders") or 9899)
+                kegs_alloc = int(ov_run.get("kegs_allocated") or ov_kpis.get("proposed_units") or 0)
+                freight_inr = float(ov_run.get("total_freight_inr") or ov_kpis.get("estimated_freight_inr") or 0)
+                policy_lbl = ov_run.get("source_policy_label") or "Depot-First"
+                banner_text = (
+                    "# MicroStar Keg Fulfillment Control Tower\n"
+                    f"**Policy: {policy_lbl}** · "
+                    "**Simulated scenario · Proposed plan — not a booking** · "
+                    f"Planning horizon: **{h_orders:,}** earliest-due orders of {t_open:,} open orders "
+                    f"(**{kegs_alloc:,}** proposed kegs, **₹{round(freight_inr):,}** modeled freight). "
+                    "Explore **[Order Fulfillment](/operations/orders)**, **[Exceptions Triage](/operations/exceptions)**, or **[Scenario Lab](/operations/scenarios)**."
+                )
+            except Exception:
+                banner_text = (
+                    "# MicroStar Keg Fulfillment Control Tower\n"
+                    "**Simulated scenario · Proposed plan — not a booking** · "
+                    "Overview totals reflect the active pinned planning run. "
+                    "Explore **[Order Fulfillment](/operations/orders)**, **[Exceptions Triage](/operations/exceptions)**, or **[Scenario Lab](/operations/scenarios)**."
+                )
             viz["text"] = banner_text
             viz["virtual_card"] = {
                 "display": "text",

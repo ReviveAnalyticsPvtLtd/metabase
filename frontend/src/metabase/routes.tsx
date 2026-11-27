@@ -168,7 +168,14 @@ const workspacesPage = () =>
   ).then(({ WorkspacesPage }) => ({ Component: WorkspacesPage }));
 
 const operationsPage =
-  (name: "OrdersPage" | "OrderDetailPage" | "ExceptionsPage" | "InventoryPage") =>
+  (
+    name:
+      | "OrdersPage"
+      | "OrderDetailPage"
+      | "ExceptionsPage"
+      | "InventoryPage"
+      | "ScenariosPage",
+  ) =>
   () =>
     import(/* webpackChunkName: "operations" */ "metabase/operations").then(
       (module) => ({ Component: module[name] }),
@@ -339,6 +346,10 @@ export const getRoutes = (store: AppStore): RouteObject[] => [
               {
                 path: "operations/inventory",
                 lazy: operationsPage("InventoryPage"),
+              },
+              {
+                path: "operations/scenarios",
+                lazy: operationsPage("ScenariosPage"),
               },
               {
                 path: "operations/analytics",

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { t } from "ttag";
 
 import { useNavigate, useParams } from "metabase/router";
@@ -16,13 +16,22 @@ import {
   fetchOrderAlternatives,
   fetchOrderCounterfactual,
   fetchOrderDetail,
+  proposeOrderOverride,
 } from "../api";
+import {
+  FulfillmentMap,
+  type MapLineSpec,
+  type MapMarkerSpec,
+} from "../components/FulfillmentMap";
+import { OpsCopilotPanel } from "../components/OpsCopilotPanel";
 import { SimulationBanner } from "../components/SimulationBanner";
 import { StatusBadge } from "../components/StatusBadge";
 import type {
+  OrderAlternative,
   OrderAlternativesResponse,
   OrderCounterfactualResponse,
   OrderDetailResponse,
+  OrderOverrideResponse,
 } from "../types";
 
 export function OrderDetailPage() {
@@ -32,11 +41,18 @@ export function OrderDetailPage() {
   const [detail, setDetail] = useState<OrderDetailResponse | null>(null);
   const [alts, setAlts] = useState<OrderAlternativesResponse | null>(null);
   const [counterfactual, setCounterfactual] = useState<OrderCounterfactualResponse | null>(null);
+  const [overrideDraft, setOverrideDraft] = useState<OrderOverrideResponse | null>(null);
+  const [overrideLoading, setOverrideLoading] = useState(false);
+  const [inspectedCandId, setInspectedCandId] = useState<number | null>(null);
+  const [hoveredAlt, setHoveredAlt] = useState<OrderAlternative | null>(null);
+  const [showAltPins, setShowAltPins] = useState(true);
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [cfLoading, setCfLoading] = useState(false);
   const [cfError, setCfError] = useState<string | null>(null);
   const [showWhy, setShowWhy] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const tradeoffRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!orderId) {
@@ -46,6 +62,8 @@ export function OrderDetailPage() {
     setLoading(true);
     setError(null);
     setCounterfactual(null);
+    setInspectedCandId(null);
+    setHoveredAlt(null);
     setCfError(null);
     Promise.all([
       fetchOrderDetail(orderId),
@@ -69,11 +87,138 @@ export function OrderDetailPage() {
     };
   }, [orderId]);
 
+  const handleInspectTradeoff = (candidateRouteId: number) => {
+    setInspectedCandId(candidateRouteId);
+    setCfLoading(true);
+    setCfError(null);
+    setTimeout(() => {
+      tradeoffRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }, 30);
+    fetchOrderCounterfactual(orderId, candidateRouteId)
+      .then((res) => {
+        setCounterfactual(res);
+        setCfLoading(false);
+      })
+      .catch((err) => {
+        setCfError(err instanceof Error ? err.message : t`Could not load trade-off analysis.`);
+        setCfLoading(false);
+      });
+  };
+
+  const { mapMarkers, mapLines } = useMemo(() => {
+    if (!detail) {
+      return { mapMarkers: [], mapLines: [] };
+    }
+    const ord = detail.order;
+    const markers: MapMarkerSpec[] = [];
+    const lines: MapLineSpec[] = [];
+
+    if (ord.dest_lat != null && ord.dest_lng != null) {
+      markers.push({
+        id: `dest-${ord.destination_customer_id}`,
+        lat: Number(ord.dest_lat),
+        lng: Number(ord.dest_lng),
+        label: `Destination: ${ord.destination_brewer}`,
+        badgeText: "Brewer",
+        sublabel: `${ord.dest_city || ""}${ord.dest_state ? `, ${ord.dest_state}` : ""} · Needed ${String(ord.needed_by).slice(0, 10)}`,
+        color: "#7C3AED",
+        radius: 10,
+        selected: true,
+      });
+    }
+
+    if (ord.allocated_units > 0 && ord.src_lat != null && ord.src_lng != null) {
+      markers.push({
+        id: `src-${ord.source_customer_id}`,
+        lat: Number(ord.src_lat),
+        lng: Number(ord.src_lng),
+        label: `Selected Source: ${ord.source_hub}`,
+        badgeText: ord.src_role || "Source",
+        sublabel: `${ord.src_city || ""}${ord.src_state ? `, ${ord.src_state}` : ""} · ${ord.allocated_units} ${ord.keg_size} kegs via ${ord.carrier}`,
+        color: "#2563EB",
+        radius: 10,
+        selected: true,
+      });
+
+      if (ord.dest_lat != null && ord.dest_lng != null) {
+        lines.push({
+          id: "selected-leg",
+          fromLat: Number(ord.src_lat),
+          fromLng: Number(ord.src_lng),
+          toLat: Number(ord.dest_lat),
+          toLng: Number(ord.dest_lng),
+          color: "#2563EB",
+          dashed: true,
+          highlighted: true,
+          label: `Selected: ${ord.source_hub} → ${ord.destination_brewer} (${ord.distance_km} km modeled · ~${ord.transit_days}d)`,
+        });
+      }
+    }
+
+    if (showAltPins && alts?.alternatives) {
+      const seenSources = new Set<string>();
+      if (ord.source_customer_id) {
+        seenSources.add(ord.source_customer_id);
+      }
+      for (const alt of alts.alternatives) {
+        if (alt.selected || alt.src_lat == null || alt.src_lng == null) {
+          continue;
+        }
+        const isHoveredOrInspected =
+          hoveredAlt?.source_customer_id === alt.source_customer_id ||
+          inspectedCandId === alt.candidate_route_id;
+
+        if (!seenSources.has(alt.source_customer_id)) {
+          seenSources.add(alt.source_customer_id);
+          const altColor =
+            alt.reason_code === "POLICY_EXCLUDED_PEER_BREWER" || !alt.feasible
+              ? "#DC2626"
+              : "#D97706";
+          markers.push({
+            id: `alt-${alt.source_customer_id}`,
+            lat: Number(alt.src_lat),
+            lng: Number(alt.src_lng),
+            label: `Alternative: ${alt.source_name}`,
+            badgeText: alt.source_role || "Candidate",
+            sublabel: `${alt.carrier_name} · ${alt.distance_km} km · ₹${Number(alt.freight_cost_inr).toLocaleString()} · ${alt.rejection_reason || ""}`,
+            color: altColor,
+            radius: isHoveredOrInspected ? 10 : 6,
+            selected: isHoveredOrInspected,
+            onClick:
+              alt.candidate_route_id > 0
+                ? () => handleInspectTradeoff(alt.candidate_route_id)
+                : undefined,
+          });
+        }
+
+        if (
+          isHoveredOrInspected &&
+          ord.dest_lat != null &&
+          ord.dest_lng != null
+        ) {
+          lines.push({
+            id: `alt-line-${alt.evidence_id}`,
+            fromLat: Number(alt.src_lat),
+            fromLng: Number(alt.src_lng),
+            toLat: Number(ord.dest_lat),
+            toLng: Number(ord.dest_lng),
+            color: "#D97706",
+            dashed: true,
+            highlighted: true,
+            label: `Alternative: ${alt.source_name} → ${ord.destination_brewer} (${alt.distance_km} km · ₹${Number(alt.freight_cost_inr).toLocaleString()})`,
+          });
+        }
+      }
+    }
+
+    return { mapMarkers: markers, mapLines: lines };
+  }, [detail, alts, showAltPins, hoveredAlt, inspectedCandId]);
+
   if (loading) {
     return (
-      <Box p="lg" maw={1280} mx="auto">
+      <Box p="lg" maw={1440} mx="auto">
         <Text size="sm" c="text-secondary">
-          {t`Loading order fulfillment details...`}
+          {t`Loading order fulfillment details & map...`}
         </Text>
       </Box>
     );
@@ -81,7 +226,7 @@ export function OrderDetailPage() {
 
   if (error || !detail) {
     return (
-      <Box p="lg" maw={1280} mx="auto">
+      <Box p="lg" maw={1440} mx="auto">
         <Button variant="default" mb="md" onClick={() => navigate("/operations/orders")}>
           {t`Back to Orders`}
         </Button>
@@ -96,29 +241,8 @@ export function OrderDetailPage() {
 
   const { order, run, disclosures, consistency_check, planning_policy } = detail;
 
-  const handleInspectTradeoff = (candidateRouteId: number) => {
-    setCfLoading(true);
-    setCfError(null);
-    fetchOrderCounterfactual(orderId, candidateRouteId)
-      .then((res) => {
-        setCounterfactual(res);
-        setCfLoading(false);
-      })
-      .catch((err) => {
-        setCfError(err instanceof Error ? err.message : t`Could not load trade-off analysis.`);
-        setCfLoading(false);
-      });
-  };
-  const hasValidCoords =
-    order.src_lat != null &&
-    order.src_lng != null &&
-    order.dest_lat != null &&
-    order.dest_lng != null &&
-    Number.isFinite(Number(order.src_lat)) &&
-    Number.isFinite(Number(order.dest_lat));
-
   return (
-    <Box p="lg" maw={1280} mx="auto">
+    <Box p="lg" maw={1440} mx="auto">
       <Flex justify="space-between" align="center" mb="sm" wrap="wrap" gap="sm">
         <Group gap="sm">
           <Button variant="default" onClick={() => navigate("/operations/orders")}>
@@ -127,12 +251,38 @@ export function OrderDetailPage() {
           <Title order={2}>{order.order_id}</Title>
           <StatusBadge status={order.status} />
         </Group>
-        <Text size="sm" c="text-secondary">
-          {t`${order.destination_brewer} · ${order.region} · ${order.keg_size} · Needed by ${String(order.needed_by).slice(0, 10)}`}
-        </Text>
+        <Group gap="sm">
+          <Text size="sm" c="text-secondary">
+            {t`${order.destination_brewer} · ${order.region} · ${order.keg_size} · Needed by ${String(order.needed_by).slice(0, 10)}`}
+          </Text>
+          <Button
+            size="xs"
+            variant="subtle"
+            onClick={() => setShowDiagnostics((v) => !v)}
+          >
+            {showDiagnostics ? t`Hide Audit Details` : t`View Audit Evidence`}
+          </Button>
+        </Group>
       </Flex>
 
       <SimulationBanner run={run} disclosures={disclosures} />
+
+      {showDiagnostics && (
+        <Box
+          p="sm"
+          mb="md"
+          style={{
+            border: "1px dashed var(--mb-color-border)",
+            borderRadius: 8,
+            backgroundColor: "var(--mb-color-background-secondary)",
+          }}
+        >
+          <Text size="xs" fw={600} mb={4}>{t`Technical Provenance & Diagnostics`}</Text>
+          <Text size="xs" c="text-secondary">
+            {`Run: ${run.run_id} · Mode: ${planning_policy?.mode || "MODE_A_ORDER_LEVEL"} · Policy: ${planning_policy?.source_policy || "depot_first"} · Objective: ${planning_policy?.objective_policy || "—"} · Stage: ${planning_policy?.decision_stage || "—"} · Solver: ${run.diagnostic?.solver_status || "—"}`}
+          </Text>
+        </Box>
+      )}
 
       {!order.reconciled && (
         <Box p="md" mb="md" style={{ border: "1px solid var(--mb-color-error)", borderRadius: 8 }}>
@@ -181,136 +331,55 @@ export function OrderDetailPage() {
         </Flex>
       </Box>
 
-      {/* Fulfillment Journey */}
-      <Box p="md" mb="md" style={{ border: "1px solid var(--mb-color-border)", borderRadius: 8 }}>
-        <Title order={4} mb="sm">{t`Proposed fulfillment journey`}</Title>
-        <Flex align="center" gap="md" wrap="wrap">
-          <Box p="sm" style={{ border: "1px solid var(--mb-color-border)", borderRadius: 6, minWidth: 200 }}>
-            <Badge
-              size="xs"
-              mb={4}
-              style={{
-                backgroundColor: "#E8F0FE",
-                color: "#1967D2",
-                border: "1px solid #D2E3FC",
-                textTransform: "none",
-              }}
-            >
-              {order.src_role || t`Source facility`}
-            </Badge>
-            <Text fw={600}>{order.source_hub}</Text>
-            {order.src_city && (
-              <Text size="xs" c="text-secondary">{`${order.src_city}${order.src_state ? `, ${order.src_state}` : ""}`}</Text>
-            )}
-          </Box>
-          <Text fw={700}>→</Text>
-          <Box p="sm" style={{ border: "1px solid var(--mb-color-border)", borderRadius: 6, minWidth: 200 }}>
-            <Badge
-              size="xs"
-              mb={4}
-              style={{
-                backgroundColor: "#E6F4EA",
-                color: "#137333",
-                border: "1px solid #CEEAD6",
-                textTransform: "none",
-              }}
-            >
-              {order.distributor_mode === "physical_stop" ? t`Physical stop` : t`Coordinator (not a physical stop)`}
-            </Badge>
-            <Text fw={600}>{order.distributor || "Unassigned"}</Text>
+      {/* Interactive Route Map + Timeline */}
+      <Flex gap="md" mb="md" wrap="wrap" align="stretch">
+        <Box style={{ flex: "1.4 1 520px" }}>
+          <Flex justify="space-between" align="center" mb="xs">
             <Text size="xs" c="text-secondary">
-              {order.allocated_units > 0
-                ? t`${order.carrier} · ${order.distance_km} km modeled · ~${order.transit_days} day(s) estimated`
-                : t`No carrier assigned`}
+              {t`Click or hover an alternative below (or click amber pins on the map) to compare routes.`}
             </Text>
-          </Box>
-          <Text fw={700}>→</Text>
-          <Box p="sm" style={{ border: "1px solid var(--mb-color-border)", borderRadius: 6, minWidth: 200 }}>
-            <Badge
-              size="xs"
-              mb={4}
-              style={{
-                backgroundColor: "#EDE7F6",
-                color: "#4527A0",
-                border: "1px solid #D1C4E9",
-                textTransform: "none",
-              }}
-            >
-              {t`Destination Brewer`}
-            </Badge>
-            <Text fw={600}>{order.destination_brewer}</Text>
-            {order.dest_city && (
-              <Text size="xs" c="text-secondary">{`${order.dest_city}${order.dest_state ? `, ${order.dest_state}` : ""}`}</Text>
-            )}
-          </Box>
-        </Flex>
-        <Group gap="lg" mt="sm">
-          <Text size="sm">
-            {t`Proposed quantity: ${order.allocated_units.toLocaleString()} ${order.keg_size} kegs`}
-          </Text>
-          <Text size="sm">
-            {t`Estimated freight: ₹${Number(order.freight_cost_inr || 0).toLocaleString()} (modeled rate)`}
-          </Text>
-        </Group>
-      </Box>
-
-      {/* Schematic Location View & Timeline */}
-      <Flex gap="md" mb="md" wrap="wrap">
-        <Box p="md" style={{ flex: "1 1 360px", border: "1px solid var(--mb-color-border)", borderRadius: 8 }}>
-          <Title order={4} mb="xs">{t`Location relationship`}</Title>
-          {hasValidCoords ? (
-            <>
-              <Text size="xs" c="text-secondary" mb="xs">
-                {t`Schematic connection — not a road route`}
-              </Text>
-              <svg
-                width="100%"
-                height="92"
-                viewBox="0 0 420 92"
-                role="img"
-                aria-label={t`Schematic connection from ${order.source_hub} to ${order.destination_brewer}`}
-                style={{ display: "block", marginBottom: 8 }}
-              >
-                <line
-                  x1="60"
-                  y1="38"
-                  x2="360"
-                  y2="38"
-                  stroke="#509EE3"
-                  strokeWidth="2.5"
-                  strokeDasharray="6 4"
-                />
-                <circle cx="60" cy="38" r="14" fill="#E8F0FE" stroke="#1967D2" strokeWidth="2" />
-                <text x="60" y="42" textAnchor="middle" fontSize="11" fontWeight="700" fill="#1967D2">1</text>
-                <circle cx="360" cy="38" r="14" fill="#EDE7F6" stroke="#4527A0" strokeWidth="2" />
-                <text x="360" y="42" textAnchor="middle" fontSize="11" fontWeight="700" fill="#4527A0">2</text>
-                <text x="210" y="28" textAnchor="middle" fontSize="11" fill="#5F6368">
-                  {order.allocated_units > 0
-                    ? `${order.distance_km} km modeled · ~${order.transit_days}d`
-                    : t`No modeled leg`}
-                </text>
-                <text x="60" y="72" textAnchor="middle" fontSize="11" fill="#3C4043">
-                  {order.source_customer_id || t`Unallocated`}
-                </text>
-                <text x="360" y="72" textAnchor="middle" fontSize="11" fill="#3C4043">
-                  {order.destination_customer_id}
-                </text>
-              </svg>
-              <Text size="xs" c="text-secondary">
-                {t`Source (${Number(order.src_lat).toFixed(2)}, ${Number(order.src_lng).toFixed(2)}) → Destination (${Number(order.dest_lat).toFixed(2)}, ${Number(order.dest_lng).toFixed(2)})`}
-              </Text>
-            </>
-          ) : (
-            <Text size="sm" c="text-secondary">
-              {t`Facility coordinates are unavailable for this order (no default location plotted).`}
-            </Text>
-          )}
+            <Button size="xs" variant="subtle" onClick={() => setShowAltPins((v) => !v)}>
+              {showAltPins ? t`Hide Alternative Pins` : t`Show Alternative Pins`}
+            </Button>
+          </Flex>
+          <FulfillmentMap
+            markers={mapMarkers}
+            lines={mapLines}
+            height={360}
+            title={t`Proposed Route & Evaluated Source Locations`}
+            subtitle={t`Schematic connection — not a road route (${order.distance_km} km modeled; road routing provider pending approval)`}
+            legendItems={[
+              { label: t`Selected Source`, color: "#2563EB" },
+              { label: t`Destination Brewer`, color: "#7C3AED" },
+              { label: t`Alternative (Stock Committed)`, color: "#D97706" },
+              { label: t`Ineligible / Deadline`, color: "#DC2626" },
+            ]}
+          />
         </Box>
 
-        <Box p="md" style={{ flex: "1 1 360px", border: "1px solid var(--mb-color-border)", borderRadius: 8 }}>
-          <Title order={4} mb="xs">{t`Timeline`}</Title>
+        <Box p="md" style={{ flex: "1 1 360px", border: "1px solid var(--mb-color-border)", borderRadius: 10 }}>
+          <Title order={4} mb="sm">{t`Proposed journey & timeline`}</Title>
+          <Box mb="md">
+            <Flex align="center" gap="xs" wrap="wrap" mb="xs">
+              <Badge style={{ backgroundColor: "#E8F0FE", color: "#1967D2", textTransform: "none" }}>
+                {order.src_role || t`Source`}
+              </Badge>
+              <Text fw={600} size="sm">{order.source_hub}</Text>
+            </Flex>
+            <Text size="xs" c="text-secondary" mb="xs">
+              {`↓ ${order.distributor_mode === "physical_stop" ? t`Physical stop` : t`Coordinated via`} ${order.distributor || "Unassigned"} · ${order.allocated_units > 0 ? `${order.carrier} · ₹${Number(order.freight_cost_inr || 0).toLocaleString()}` : t`No carrier assigned`}`}
+            </Text>
+            <Flex align="center" gap="xs" wrap="wrap">
+              <Badge style={{ backgroundColor: "#EDE7F6", color: "#4527A0", textTransform: "none" }}>
+                {t`Destination Brewer`}
+              </Badge>
+              <Text fw={600} size="sm">{order.destination_brewer}</Text>
+            </Flex>
+          </Box>
+
+          <Title order={5} mb="xs">{t`Timing & feasibility`}</Title>
           {order.timeline.map((item) => (
-            <Flex key={item.label} justify="space-between" py={4}>
+            <Flex key={item.label} justify="space-between" py={5} style={{ borderBottom: "1px solid var(--mb-color-border)" }}>
               <Text size="sm" fw={500}>{item.label}</Text>
               <Group gap="xs">
                 <Text size="sm">
@@ -354,13 +423,8 @@ export function OrderDetailPage() {
             <Text size="sm" mb="xs">{order.why_this_plan}</Text>
             <Group gap="md" wrap="wrap">
               <Text size="xs" c="text-secondary">
-                {t`Planning mode: Order-level allocation (single-source allocation per order)`}
+                {t`Source policy: ${planning_policy?.source_policy_label || t`Depot-First — approved facilities and distributors`}`}
               </Text>
-              {planning_policy?.decision_stage && (
-                <Text size="xs" c="text-secondary">
-                  {t`Decision stage: ${planning_policy.decision_stage}`}
-                </Text>
-              )}
               {order.cost_formula && (
                 <Text size="xs" c="text-secondary">
                   {t`Cost basis: ${order.cost_formula}`}
@@ -371,14 +435,130 @@ export function OrderDetailPage() {
         )}
       </Box>
 
-      {/* Evaluated Alternatives */}
-      <Box p="md" mb="md" style={{ border: "1px solid var(--mb-color-border)", borderRadius: 8 }}>
+      {/* Embedded Order-Scoped AI Copilot */}
+      <OpsCopilotPanel orderId={order.order_id} compact />
+
+      {/* Evaluated Alternatives + Inline/Top Trade-Off Inspector */}
+      <Box p="md" mb="md" style={{ border: "1px solid var(--mb-color-border)", borderRadius: 8 }} ref={tradeoffRef}>
         <Title order={4} mb={4}>{t`Evaluated alternatives`}</Title>
         <Text size="xs" c="text-secondary" mb="sm">
           {alts && alts.truncated
             ? t`Showing ${alts.returned_count ?? alts.alternatives.length} of ${alts.evaluated_count ?? alts.alternatives.length} evaluated candidates${alts.omitted_count ? ` (${alts.omitted_count} farther sources omitted by source cap)` : ""}. Bounded search — not guaranteed global optimum.`
             : t`Showing all ${alts?.alternatives.length ?? 0} evaluated candidates for this order.`}
         </Text>
+
+        {cfLoading && (
+          <Box
+            p="sm"
+            mb="sm"
+            style={{
+              border: "1px solid #1967D2",
+              backgroundColor: "#E8F0FE",
+              borderRadius: 6,
+            }}
+          >
+            <Text size="sm" fw={600} style={{ color: "#1967D2" }}>
+              {t`Running counterfactual trade-off analysis for selected candidate...`}
+            </Text>
+          </Box>
+        )}
+        {cfError && (
+          <Text size="xs" c="error" mb="sm">{cfError}</Text>
+        )}
+        {counterfactual && (
+          <Box
+            p="md"
+            mb="md"
+            style={{
+              border: "2px solid #1967D2",
+              backgroundColor: "var(--mb-color-background-secondary)",
+              borderRadius: 8,
+            }}
+            data-testid="counterfactual-tradeoff-panel"
+          >
+            <Flex justify="space-between" align="center" mb="xs" wrap="wrap" gap="xs">
+              <Text fw={700} size="sm">
+                {t`Trade-Off Inspection: ${counterfactual.target_source_name} via ${counterfactual.carrier_name}`}
+              </Text>
+              <Group gap="xs">
+                <Button
+                  size="xs"
+                  variant="light"
+                  loading={overrideLoading}
+                  onClick={() => {
+                    setOverrideLoading(true);
+                    proposeOrderOverride(order.order_id, {
+                      source_customer_id: counterfactual.target_source_id,
+                      carrier: counterfactual.carrier_name,
+                      quantity: order.pending_units,
+                    })
+                      .then((res) => {
+                        setOverrideDraft(res);
+                        setOverrideLoading(false);
+                      })
+                      .catch((err) => {
+                        setCfError(err instanceof Error ? err.message : t`Override failed`);
+                        setOverrideLoading(false);
+                      });
+                  }}
+                >
+                  {t`Try another option (Draft Override)`}
+                </Button>
+                <Button variant="subtle" size="xs" onClick={() => { setCounterfactual(null); setInspectedCandId(null); setOverrideDraft(null); }}>
+                  {t`Close`}
+                </Button>
+              </Group>
+            </Flex>
+            <Text size="sm" mb="xs">{counterfactual.conclusion}</Text>
+            <Group gap="lg" mb="xs" wrap="wrap">
+              {counterfactual.solver_status && (
+                <Text size="xs" c="text-secondary">
+                  {t`Solver: ${counterfactual.solver_status}`}
+                </Text>
+              )}
+              {counterfactual.kegs_delta != null && (
+                <Text size="xs" c="text-secondary">
+                  {t`Plan Kegs Delta: ${counterfactual.kegs_delta >= 0 ? "+" : ""}${counterfactual.kegs_delta.toLocaleString()}`}
+                </Text>
+              )}
+              {counterfactual.freight_delta_inr != null && (
+                <Text size="xs" c="text-secondary">
+                  {t`Plan Freight Delta: ${counterfactual.freight_delta_inr >= 0 ? "+" : ""}₹${Number(counterfactual.freight_delta_inr).toLocaleString()}`}
+                </Text>
+              )}
+              {counterfactual.uncovered_delta != null && (
+                <Text size="xs" c="text-secondary">
+                  {t`Uncovered Orders Delta: ${counterfactual.uncovered_delta >= 0 ? "+" : ""}${counterfactual.uncovered_delta}`}
+                </Text>
+              )}
+            </Group>
+            {overrideDraft && (
+              <Box p="xs" my="xs" style={{ border: "1px solid #137333", backgroundColor: "#E6F4EA", borderRadius: 6 }}>
+                <Text size="xs" fw={700} style={{ color: "#137333" }}>
+                  {overrideDraft.ok
+                    ? t`Draft Override Re-Solved (Active Plan Unchanged): ${overrideDraft.forced_qty} kegs from ${overrideDraft.target_source_name}, plan freight delta ${overrideDraft.freight_delta_inr != null && overrideDraft.freight_delta_inr >= 0 ? "+" : ""}₹${Number(overrideDraft.freight_delta_inr || 0).toLocaleString()}, ${overrideDraft.affected_orders_total ?? 0} order(s) affected.`
+                    : t`Draft Override Blocked: ${overrideDraft.error}`}
+                </Text>
+              </Box>
+            )}
+            {counterfactual.affected_orders.length > 0 && (
+              <Group gap="xs" wrap="wrap">
+                <Text size="xs" c="text-secondary">{t`Affected orders in re-solve:`}</Text>
+                {counterfactual.affected_orders.slice(0, 6).map((ao) => (
+                  <Button
+                    key={ao.order_id}
+                    size="xs"
+                    variant="default"
+                    onClick={() => navigate(`/operations/orders/${ao.order_id}`)}
+                  >
+                    {`${ao.order_id} (${ao.allocated_delta_kegs != null ? `${ao.allocated_delta_kegs >= 0 ? "+" : ""}${ao.allocated_delta_kegs}` : ao.allocated_units} kegs)`}
+                  </Button>
+                ))}
+              </Group>
+            )}
+          </Box>
+        )}
+
         {!alts || alts.alternatives.length === 0 ? (
           <Text size="sm" c="text-secondary">
             {alts?.evidence_status === "empty"
@@ -391,125 +571,98 @@ export function OrderDetailPage() {
               <thead>
                 <tr style={{ borderBottom: "1px solid var(--mb-color-border)", textAlign: "left" }}>
                   <th style={{ padding: "8px 10px" }}>{t`Source`}</th>
+                  <th style={{ padding: "8px 10px" }}>{t`Role`}</th>
                   <th style={{ padding: "8px 10px" }}>{t`Carrier`}</th>
                   <th style={{ padding: "8px 10px", textAlign: "right" }}>{t`Qty`}</th>
                   <th style={{ padding: "8px 10px", textAlign: "right" }}>{t`Stock (Avail/Rem)`}</th>
-                  <th style={{ padding: "8px 10px", textAlign: "right" }}>{t`Modeled distance`}</th>
-                  <th style={{ padding: "8px 10px", textAlign: "right" }}>{t`Estimated transit`}</th>
-                  <th style={{ padding: "8px 10px", textAlign: "right" }}>{t`Due-date slack`}</th>
-                  <th style={{ padding: "8px 10px", textAlign: "right" }}>{t`Estimated freight`}</th>
+                  <th style={{ padding: "8px 10px", textAlign: "right" }}>{t`Distance`}</th>
+                  <th style={{ padding: "8px 10px", textAlign: "right" }}>{t`Transit / Slack`}</th>
+                  <th style={{ padding: "8px 10px", textAlign: "right" }}>{t`Est. Freight`}</th>
                   <th style={{ padding: "8px 10px" }}>{t`Decision`}</th>
                   <th style={{ padding: "8px 10px" }}>{t`Reason`}</th>
                   <th style={{ padding: "8px 10px" }}>{t`Trade-off`}</th>
                 </tr>
               </thead>
               <tbody>
-                {alts.alternatives.map((alt) => (
-                  <tr key={alt.evidence_id} style={{ borderBottom: "1px solid var(--mb-color-border)" }}>
-                    <td style={{ padding: "8px 10px" }}>
-                      <div>{alt.source_name}</div>
-                      <Text size="xs" c="text-secondary">{alt.source_customer_id}</Text>
-                    </td>
-                    <td style={{ padding: "8px 10px" }}>{alt.carrier_name}</td>
-                    <td style={{ padding: "8px 10px", textAlign: "right" }}>
-                      {alt.candidate_quantity != null ? alt.candidate_quantity.toLocaleString() : "—"}
-                    </td>
-                    <td style={{ padding: "8px 10px", textAlign: "right" }}>
-                      {alt.stock_available_kegs != null
-                        ? `${alt.stock_available_kegs} / ${alt.stock_remaining_kegs ?? "—"}`
-                        : "—"}
-                    </td>
-                    <td style={{ padding: "8px 10px", textAlign: "right" }}>{`${alt.distance_km} km`}</td>
-                    <td style={{ padding: "8px 10px", textAlign: "right" }}>{`${alt.transit_days} d`}</td>
-                    <td style={{ padding: "8px 10px", textAlign: "right" }}>{`${alt.slack_days} d`}</td>
-                    <td style={{ padding: "8px 10px", textAlign: "right" }}>{`₹${Number(alt.freight_cost_inr).toLocaleString()}`}</td>
-                    <td style={{ padding: "8px 10px" }}>
-                      <Badge
-                        size="sm"
-                        style={
-                          alt.selected
-                            ? {
-                                backgroundColor: "#E6F4EA",
-                                color: "#137333",
-                                border: "1px solid #CEEAD6",
-                                textTransform: "none",
-                              }
-                            : {
-                                backgroundColor: "#F1F3F4",
-                                color: "#3C4043",
-                                border: "1px solid #DADCE0",
-                                textTransform: "none",
-                              }
-                        }
-                      >
-                        {alt.selected ? t`Selected` : t`Not selected`}
-                      </Badge>
-                    </td>
-                    <td style={{ padding: "8px 10px" }}>
-                      {alt.rejection_reason || (alt.selected ? t`Selected in optimization run` : "—")}
-                    </td>
-                    <td style={{ padding: "8px 10px" }}>
-                      {!alt.selected && alt.candidate_route_id > 0 ? (
-                        <Button
-                          size="xs"
-                          variant="default"
-                          onClick={() => handleInspectTradeoff(alt.candidate_route_id)}
+                {alts.alternatives.map((alt) => {
+                  const isInspected = inspectedCandId === alt.candidate_route_id && alt.candidate_route_id > 0;
+                  return (
+                    <tr
+                      key={alt.evidence_id}
+                      onMouseEnter={() => setHoveredAlt(alt)}
+                      onMouseLeave={() => setHoveredAlt(null)}
+                      style={{
+                        borderBottom: "1px solid var(--mb-color-border)",
+                        backgroundColor: isInspected
+                          ? "rgba(25, 103, 210, 0.08)"
+                          : alt.selected
+                          ? "rgba(22, 163, 74, 0.05)"
+                          : undefined,
+                      }}
+                    >
+                      <td style={{ padding: "8px 10px" }}>
+                        <div style={{ fontWeight: 600 }}>{alt.source_name}</div>
+                        <Text size="xs" c="text-secondary">{alt.source_customer_id}</Text>
+                      </td>
+                      <td style={{ padding: "8px 10px" }}>{alt.source_role || "—"}</td>
+                      <td style={{ padding: "8px 10px" }}>{alt.carrier_name}</td>
+                      <td style={{ padding: "8px 10px", textAlign: "right" }}>
+                        {alt.candidate_quantity != null ? alt.candidate_quantity.toLocaleString() : "—"}
+                      </td>
+                      <td style={{ padding: "8px 10px", textAlign: "right" }}>
+                        {alt.stock_available_kegs != null
+                          ? `${alt.stock_available_kegs} / ${alt.stock_remaining_kegs ?? "—"}`
+                          : "—"}
+                      </td>
+                      <td style={{ padding: "8px 10px", textAlign: "right" }}>{`${alt.distance_km} km`}</td>
+                      <td style={{ padding: "8px 10px", textAlign: "right" }}>{`${alt.transit_days}d / ${alt.slack_days}d`}</td>
+                      <td style={{ padding: "8px 10px", textAlign: "right" }}>{`₹${Number(alt.freight_cost_inr).toLocaleString()}`}</td>
+                      <td style={{ padding: "8px 10px" }}>
+                        <Badge
+                          size="sm"
+                          style={
+                            alt.selected
+                              ? {
+                                  backgroundColor: "#E6F4EA",
+                                  color: "#137333",
+                                  border: "1px solid #CEEAD6",
+                                  textTransform: "none",
+                                }
+                              : {
+                                  backgroundColor: "#F1F3F4",
+                                  color: "#3C4043",
+                                  border: "1px solid #DADCE0",
+                                  textTransform: "none",
+                                }
+                          }
                         >
-                          {t`Inspect`}
-                        </Button>
-                      ) : (
-                        "—"
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                          {alt.selected ? t`Selected` : t`Not selected`}
+                        </Badge>
+                      </td>
+                      <td style={{ padding: "8px 10px" }}>
+                        {alt.rejection_reason || (alt.selected ? t`Selected in optimization run` : "—")}
+                      </td>
+                      <td style={{ padding: "8px 10px" }}>
+                        {!alt.selected && alt.candidate_route_id > 0 ? (
+                          <Button
+                            size="xs"
+                            variant={isInspected ? "filled" : "default"}
+                            loading={cfLoading && isInspected}
+                            onClick={() => handleInspectTradeoff(alt.candidate_route_id)}
+                          >
+                            {isInspected ? t`Inspected` : t`Inspect`}
+                          </Button>
+                        ) : alt.reason_code === "POLICY_EXCLUDED_PEER_BREWER" ? (
+                          <Text size="xs" c="text-secondary">{t`Policy`}</Text>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
-          </Box>
-        )}
-
-        {cfLoading && (
-          <Text size="xs" c="text-secondary" mt="sm">
-            {t`Loading counterfactual trade-off...`}
-          </Text>
-        )}
-        {cfError && (
-          <Text size="xs" c="error" mt="sm">{cfError}</Text>
-        )}
-        {counterfactual && (
-          <Box
-            p="sm"
-            mt="md"
-            style={{
-              border: "1px solid var(--mb-color-border)",
-              backgroundColor: "var(--mb-color-background-secondary)",
-              borderRadius: 6,
-            }}
-          >
-            <Flex justify="space-between" align="center" mb="xs">
-              <Text fw={600} size="sm">
-                {t`Counterfactual Trade-Off: ${counterfactual.target_source_name} via ${counterfactual.carrier_name}`}
-              </Text>
-              <Button variant="subtle" size="xs" onClick={() => setCounterfactual(null)}>
-                {t`Close`}
-              </Button>
-            </Flex>
-            <Text size="sm" mb="xs">{counterfactual.conclusion}</Text>
-            {counterfactual.affected_orders.length > 0 && (
-              <Group gap="xs" wrap="wrap">
-                <Text size="xs" c="text-secondary">{t`Competing orders using this stock:`}</Text>
-                {counterfactual.affected_orders.slice(0, 6).map((ao) => (
-                  <Button
-                    key={ao.order_id}
-                    size="xs"
-                    variant="default"
-                    onClick={() => navigate(`/operations/orders/${ao.order_id}`)}
-                  >
-                    {`${ao.order_id} (${ao.allocated_units} kegs)`}
-                  </Button>
-                ))}
-              </Group>
-            )}
           </Box>
         )}
       </Box>

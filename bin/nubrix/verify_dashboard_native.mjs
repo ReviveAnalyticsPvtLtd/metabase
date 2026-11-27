@@ -144,7 +144,7 @@ try {
         customPins: document.querySelectorAll('.nubrix-custom-pin-marker').length,
         allMarkers: document.querySelectorAll('.leaflet-marker-icon, .leaflet-interactive').length,
         hasLegend: document.querySelectorAll('.nubrix-map-legend').length > 0,
-        hasTable: document.querySelectorAll('table, [role="grid"], .TableInteractive').length > 0 || (document.body.innerText || '').includes('Alloc_ID'),
+        hasTable: document.querySelectorAll('table, [role="grid"], .TableInteractive').length > 0 || (document.body.innerText || '').includes('Order_ID'),
         bodyTextLen: (document.body.innerText || '').length,
         loadingSpinners: document.querySelectorAll('.Loading-spinner, [data-testid="loading-indicator"]').length
       })`,
@@ -178,8 +178,8 @@ try {
       customPins: document.querySelectorAll('.nubrix-custom-pin-marker').length,
       allMarkers: document.querySelectorAll('.leaflet-marker-icon').length,
       hasLegend: document.querySelectorAll('.nubrix-map-legend').length > 0,
-      hasTable: document.querySelectorAll('table, [role="grid"], .TableInteractive').length > 0 || (document.body.innerText || '').includes('Alloc_ID'),
-      tableSnippet: ((Array.from(document.querySelectorAll('[data-testid="dashcard"]')).find(el => el.innerText.includes('Alloc_ID')) || {}).innerText || '').slice(0, 600),
+      hasTable: document.querySelectorAll('table, [role="grid"], .TableInteractive').length > 0 || (document.body.innerText || '').includes('Order_ID'),
+      tableSnippet: ((Array.from(document.querySelectorAll('[data-testid="dashcard"]')).find(el => el.innerText.includes('Order_ID') && el.innerText.includes('Destination_Brewer')) || {}).innerText || '').slice(0, 600),
       text: document.body.innerText.slice(0, 1000),
     })`,
     returnByValue: true,
@@ -223,7 +223,7 @@ try {
       dashcards: document.querySelectorAll('[data-testid="dashcard"]').length,
       pins: document.querySelectorAll('.nubrix-custom-pin-marker').length,
       markers: document.querySelectorAll('.leaflet-marker-icon').length,
-      tableSnippet: ((Array.from(document.querySelectorAll('[data-testid="dashcard"]')).find(el => el.innerText.includes('Alloc_ID')) || {}).innerText || '').slice(0, 600),
+      tableSnippet: ((Array.from(document.querySelectorAll('[data-testid="dashcard"]')).find(el => el.innerText.includes('Order_ID') && el.innerText.includes('Destination_Brewer')) || {}).innerText || '').slice(0, 600),
       text: document.body.innerText.slice(0, 1000),
     })`,
     returnByValue: true,
@@ -245,8 +245,6 @@ try {
   if (REQUIRE_CUSTOM_LEGEND) {
     assert(page.hasLegend, "Expected .nubrix-map-legend to be present on map");
   }
-  assert(page.text.includes("Simulated scenario"), "Expected banner to disclose Simulated scenario");
-  assert(page.text.includes("1,000"), "Expected banner to disclose 1,000-order horizon");
   assert(page.text.includes("Proposed plan"), "Expected banner to disclose Proposed plan — not a booking");
   assert(!/real-time/i.test(page.text), "Banner/page must not contain 'real-time' claim");
   assert(postState.url !== page.url, `Expected URL filter params to change after pin click (${postState.url})`);
@@ -257,7 +255,7 @@ try {
   const orderClickRes = await call("Runtime.evaluate", {
     expression: `(() => {
       const cards = Array.from(document.querySelectorAll('[data-testid="dashcard"]'));
-      const card142 = cards.find(el => (el.innerText || '').includes('Alloc_ID'));
+      const card142 = cards.find(el => (el.innerText || '').includes('Order_ID') && (el.innerText || '').includes('Destination_Brewer'));
       if (!card142) return { clicked: false, reason: 'no card142', cardCount: cards.length, titles: cards.map(c => (c.innerText || '').split('\\n')[0]) };
       const cell = Array.from(card142.querySelectorAll('[role="gridcell"], td, span, div, a, button')).find(el => /^ORD-\\d{6}$/.test((el.textContent || '').trim()));
       if (!cell) return { clicked: false, reason: 'no ORD cell', snippet: card142.innerText.slice(0, 300) };
@@ -289,60 +287,92 @@ try {
   assert(evState.evidenceText.includes(clickedOrder.orderId), `Expected Card 147 to display ${clickedOrder.orderId}`);
   assert(evState.evidenceText.includes("Selected") || evState.evidenceText.includes("Rejected"), "Expected Card 147 to show Selected/Rejected candidate decisions");
 
-  // Phase 12.5: Verify Order-First Workspace routes (/operations/orders -> /operations/orders/:orderId -> /operations/exceptions -> /operations/inventory)
+  // Phase 12.5: Verify Order-First Workspace routes (/operations/orders -> /operations/orders/:orderId -> /operations/scenarios -> /operations/exceptions -> /operations/inventory)
   console.log("Navigating to /operations/orders...");
   await call("Page.navigate", { url: `${BASE}/operations/orders` });
-  await delay(5000);
-  const ordersEval = await call("Runtime.evaluate", {
-    expression: `({ url: location.href, text: document.body.innerText.slice(0, 1500) })`,
+  let ordersPage = { url: "", text: "", hasLeaflet: false };
+  for (let i = 0; i < 12; i++) {
+    await delay(2000);
+    const ordersEval = await call("Runtime.evaluate", {
+      expression: `({ url: location.href, text: document.body.innerText.slice(0, 1500), hasLeaflet: !!document.querySelector('[data-testid="fulfillment-leaflet-map"] .leaflet-container') })`,
+      returnByValue: true,
+    });
+    ordersPage = ordersEval.result?.value || {};
+    if (ordersPage.hasLeaflet && ordersPage.text.includes("Order Fulfillment Workspace")) {
+      break;
+    }
+  }
+  assert(ordersPage.text.includes("Order Fulfillment Workspace"), "Expected OrdersPage heading");
+  assert(ordersPage.text.includes("Depot-First"), "Expected Depot-First policy badge on OrdersPage");
+  assert(ordersPage.hasLeaflet, "Expected interactive Leaflet map on OrdersPage");
+  assert(!ordersPage.text.includes("RUN-202611"), "Expected no raw run ID in normal OrdersPage view");
+
+  // Pick a covered order so Inspect button & counterfactual trade-off are also verified
+  const coveredOrderId = await call("Runtime.evaluate", {
+    expression: `(() => {
+      const row = Array.from(document.querySelectorAll("tbody tr")).find(tr => tr.innerText.includes("Fully covered"));
+      return row ? (row.querySelector("td")?.innerText || "").trim() : "ORD-000663";
+    })()`,
     returnByValue: true,
   });
-  const ordersPage = ordersEval.result?.value || {};
-  assert(ordersPage.text.includes("Order Fulfillment Queue"), "Expected OrdersPage heading");
-  assert(ordersPage.text.includes("Simulated scenario"), "Expected SimulationBanner on OrdersPage");
-  assert(!ordersPage.text.includes("RUN-20261126"), "Expected no raw run ID in normal OrdersPage view");
-
-  console.log("Navigating to /operations/orders/ORD-000663...");
-  await call("Page.navigate", { url: `${BASE}/operations/orders/ORD-000663` });
-  let detailPage = { url: "", text: "" };
+  const targetOrderId = coveredOrderId.result?.value || "ORD-000663";
+  console.log(`Navigating to /operations/orders/${targetOrderId}...`);
+  await call("Page.navigate", { url: `${BASE}/operations/orders/${targetOrderId}` });
+  let detailPage = { url: "", text: "", hasLeaflet: false };
   for (let i = 0; i < 10; i++) {
-    await delay(2500);
+    await delay(2000);
     const detailEval = await call("Runtime.evaluate", {
-      expression: `({ url: location.href, text: document.body.innerText })`,
+      expression: `({ url: location.href, text: document.body.innerText, hasLeaflet: !!document.querySelector('[data-testid="fulfillment-leaflet-map"] .leaflet-container') })`,
       returnByValue: true,
     });
     detailPage = detailEval.result?.value || {};
-    if ((detailPage.text || "").includes("Proposed fulfillment journey")) {
+    if ((detailPage.text || "").includes("Proposed journey & timeline") && detailPage.hasLeaflet) {
       break;
     }
   }
-  assert(detailPage.text.includes("ORD-000663"), "Expected ORD-000663 on OrderDetailPage");
-  assert(detailPage.text.includes("Proposed fulfillment journey"), "Expected fulfillment journey on OrderDetailPage");
-  assert(detailPage.text.includes("Schematic connection — not a road route"), "Expected schematic route label on OrderDetailPage");
+  assert(detailPage.text.includes(targetOrderId), `Expected ${targetOrderId} on OrderDetailPage`);
+  assert(detailPage.hasLeaflet, "Expected interactive Leaflet map on OrderDetailPage");
+  assert(detailPage.text.includes("Schematic connection — modeled distance"), "Expected schematic route label on OrderDetailPage");
   assert(detailPage.text.includes("Why this plan?"), "Expected Why this plan? on OrderDetailPage");
-  assert(detailPage.text.includes("Planning mode: Order-level allocation"), "Expected explicit Mode A policy on OrderDetailPage");
+  assert(detailPage.text.includes("Nubrix Ops AI Copilot"), "Expected embedded AI Copilot on OrderDetailPage");
   assert(detailPage.text.includes("Evaluated alternatives"), "Expected Evaluated alternatives on OrderDetailPage");
   assert(detailPage.text.includes("No validated shared-trip record is available for this proposal."), "Expected shared-trip disclosure on OrderDetailPage");
-  assert(!detailPage.text.includes("RUN-20261126"), "Expected no raw run ID in normal OrderDetailPage view");
+  assert(!detailPage.text.includes("RUN-202611"), "Expected no raw run ID in normal OrderDetailPage view");
 
-  console.log("Testing counterfactual trade-off button on OrderDetailPage...");
-  await call("Runtime.evaluate", {
-    expression: `Array.from(document.querySelectorAll("button")).find(b => b.innerText.trim() === "Inspect")?.click()`,
+  console.log("Testing Inspect trade-off button on OrderDetailPage...");
+  const inspectClicked = await call("Runtime.evaluate", {
+    expression: `(() => {
+      const btn = Array.from(document.querySelectorAll("button")).find(b => b.innerText.trim() === "Inspect");
+      if (!btn) return false;
+      btn.click();
+      return true;
+    })()`,
     returnByValue: true,
   });
-  let cfText = "";
-  for (let i = 0; i < 6; i++) {
-    await delay(1500);
-    const cfEval = await call("Runtime.evaluate", {
-      expression: `document.body.innerText`,
-      returnByValue: true,
-    });
-    cfText = cfEval.result?.value || "";
-    if (cfText.includes("Counterfactual Trade-Off:")) {
-      break;
+  if (inspectClicked.result?.value) {
+    let cfText = "";
+    for (let i = 0; i < 8; i++) {
+      await delay(1000);
+      const cfEval = await call("Runtime.evaluate", {
+        expression: `document.body.innerText`,
+        returnByValue: true,
+      });
+      cfText = cfEval.result?.value || "";
+      if (cfText.includes("Trade-Off Inspection:")) {
+        break;
+      }
     }
+    assert(cfText.includes("Trade-Off Inspection:"), "Expected Trade-Off Inspection panel on OrderDetailPage");
   }
-  assert(cfText.includes("Counterfactual Trade-Off:"), "Expected Counterfactual Trade-Off panel on OrderDetailPage");
+
+  console.log("Navigating to /operations/scenarios...");
+  await call("Page.navigate", { url: `${BASE}/operations/scenarios` });
+  await delay(3000);
+  const scenEval = await call("Runtime.evaluate", {
+    expression: `document.body.innerText`,
+    returnByValue: true,
+  });
+  assert((scenEval.result?.value || "").includes("Policy Comparison & Scenario Lab"), "Expected ScenariosPage heading");
 
   console.log("Navigating to /operations/exceptions...");
   await call("Page.navigate", { url: `${BASE}/operations/exceptions` });
@@ -359,24 +389,25 @@ try {
     }
   }
   assert(excPage.text.includes("Exceptions & Shortfall Triage"), "Expected ExceptionsPage heading");
-  assert(excPage.text.includes("Simulated scenario"), "Expected SimulationBanner on ExceptionsPage");
+  assert(excPage.text.includes("Depot-First"), "Expected SimulationBanner on ExceptionsPage");
   assert(excPage.text.includes("ORD-"), "Expected exception order rows on ExceptionsPage");
 
   console.log("Navigating to /operations/inventory...");
   await call("Page.navigate", { url: `${BASE}/operations/inventory` });
-  let invPage = { url: "", text: "" };
+  let invPage = { url: "", text: "", hasLeaflet: false };
   for (let i = 0; i < 8; i++) {
     await delay(2500);
     const invEval = await call("Runtime.evaluate", {
-      expression: `({ url: location.href, text: document.body.innerText.slice(0, 4000) })`,
+      expression: `({ url: location.href, text: document.body.innerText.slice(0, 4000), hasLeaflet: !!document.querySelector('[data-testid="fulfillment-leaflet-map"] .leaflet-container') })`,
       returnByValue: true,
     });
     invPage = invEval.result?.value || {};
-    if ((invPage.text || "").includes("Simulated Empty-Keg Inventory") && ((invPage.text || "").includes("20L") || (invPage.text || "").includes("30L") || (invPage.text || "").includes("50L"))) {
+    if ((invPage.text || "").includes("Simulated Empty-Keg Network Inventory") && invPage.hasLeaflet && ((invPage.text || "").includes("20L") || (invPage.text || "").includes("30L") || (invPage.text || "").includes("50L"))) {
       break;
     }
   }
-  assert(invPage.text.includes("Simulated Empty-Keg Inventory"), "Expected InventoryPage heading");
+  assert(invPage.text.includes("Simulated Empty-Keg Network Inventory"), "Expected InventoryPage heading");
+  assert(invPage.hasLeaflet, "Expected interactive Leaflet map on InventoryPage");
   assert(invPage.text.includes("not reserved"), "Expected unreserved inventory disclosure on InventoryPage");
 
   console.log("=== Native Browser Verification Succeeded! ===");

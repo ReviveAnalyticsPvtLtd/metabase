@@ -112,10 +112,15 @@ class ExplainabilityAuditTests(unittest.TestCase):
 
     def test_canonical_ids_persisted_and_reason_codes_populated(self):
         snap = _sample_snapshot()
-        planner = OrToolsFulfillmentPlanner(time_limit_seconds=5, max_candidates_per_order=1)
+        planner = OrToolsFulfillmentPlanner(
+            time_limit_seconds=5,
+            max_candidates_per_order=1,
+            source_policy="unrestricted_nearest",
+        )
         result = planner.plan(snap)
 
         self.assertEqual(result["planning_mode"], "MODE_A_ORDER_LEVEL")
+        self.assertEqual(result["source_policy"], "unrestricted_nearest")
         self.assertEqual(result["split_policy"], "single_source_per_order")
         self.assertGreater(result["omitted_candidates_total"], 0)
         self.assertNotIn("optimal", result["solver_status"].lower())
@@ -127,6 +132,28 @@ class ExplainabilityAuditTests(unittest.TestCase):
                     self.assertTrue(ev["source_customer_id"].startswith("CUST-"))
                     self.assertIsNotNone(ev.get("reason_code"))
                     self.assertIsNotNone(ev.get("reason"))
+
+    def test_depot_first_excludes_peer_brewers_by_policy(self):
+        snap = _sample_snapshot()
+        snap["customers"]["CUST-DEPOT"] = {
+            "id": "CUST-DEPOT",
+            "name": "West Maintenance Depot",
+            "type": "Maintenance Facility",
+            "region": "North",
+            "lat": 28.5,
+            "lon": 77.2,
+        }
+        snap["stock"].append({"source": "CUST-DEPOT", "sku": "50L", "available": 100})
+        snap["legs"].append({"origin": "CUST-DEPOT", "destination": "CUST-DEST", "km": 200})
+
+        planner = OrToolsFulfillmentPlanner(time_limit_seconds=5, max_candidates_per_order=10, source_policy="depot_first")
+        result = planner.plan(snap)
+        self.assertEqual(result["source_policy"], "depot_first")
+        outcomes = {o.order_id: o for o in result["outcomes"]}
+        self.assertEqual(outcomes["ORD-TARGET"].source_customer_id, "CUST-DEPOT")
+        self.assertTrue(
+            any(ev.get("reason_code") == "POLICY_EXCLUDED_PEER_BREWER" for ev in outcomes["ORD-TARGET"].evidence)
+        )
 
 
 if __name__ == "__main__":

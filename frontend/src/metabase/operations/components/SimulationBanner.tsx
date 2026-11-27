@@ -33,7 +33,7 @@ export function SimulationBanner({
               textTransform: "none",
             }}
           >
-            {t`Simulated scenario`}
+            {run?.source_policy_label || t`Depot-First — approved facilities and distributors`}
           </Badge>
           <Badge
             size="sm"
@@ -44,7 +44,7 @@ export function SimulationBanner({
               textTransform: "none",
             }}
           >
-            {t`Proposed plan — not a booking`}
+            {t`Simulated · Proposed plan — not a booking`}
           </Badge>
           {run?.as_of_date && (
             <Text size="xs" c="text-secondary">

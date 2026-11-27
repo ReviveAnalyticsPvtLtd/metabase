@@ -1,9 +1,13 @@
 import type {
   InventoryListResponse,
+  OpsAssistantResponse,
   OrderAlternativesResponse,
   OrderCounterfactualResponse,
   OrderDetailResponse,
+  OrderOverrideResponse,
   OrdersListResponse,
+  ScenarioRunResponse,
+  ScenariosCompareResponse,
 } from "./types";
 
 async function fetchJson<T>(url: string): Promise<T> {
@@ -91,4 +95,74 @@ export function fetchOperationsInventory(params: {
   return fetchJson<InventoryListResponse>(
     `/api/operations/inventory${buildQuery(params)}`,
   );
+}
+
+export function fetchScenariosCompare(): Promise<ScenariosCompareResponse> {
+  return fetchJson<ScenariosCompareResponse>("/api/operations/scenarios/compare");
+}
+
+export async function runWhatIfScenario(payload: {
+  scenario_type: string;
+  disabled_carrier?: string;
+  stock_pct?: number;
+  deadline_days_delta?: number;
+}): Promise<ScenarioRunResponse> {
+  const response = await fetch("/api/operations/scenarios/run", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error(`Scenario simulation failed (${response.status})`);
+  }
+  return response.json() as Promise<ScenarioRunResponse>;
+}
+
+export async function proposeOrderOverride(
+  orderId: string,
+  payload: {
+    source_customer_id: string;
+    carrier: string;
+    quantity?: number;
+  },
+): Promise<OrderOverrideResponse> {
+  const response = await fetch(
+    `/api/operations/orders/${encodeURIComponent(orderId)}/override`,
+    {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(payload),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(`Draft override re-solve failed (${response.status})`);
+  }
+  return response.json() as Promise<OrderOverrideResponse>;
+}
+
+export async function askOpsAssistant(payload: {
+  question: string;
+  order_id?: string;
+}): Promise<OpsAssistantResponse> {
+  const response = await fetch("/api/operations/assistant", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error(`AI Copilot request failed (${response.status})`);
+  }
+  return response.json() as Promise<OpsAssistantResponse>;
 }

@@ -83,10 +83,11 @@ describe("MicroStar Operations Workspace", () => {
     });
 
     renderWithProviders(<OrdersPage />);
-    expect(await screen.findByText("ORD-008116")).toBeInTheDocument();
+    expect((await screen.findAllByText("ORD-008116")).length).toBeGreaterThan(0);
     expect(screen.getByText("Bhubaneswar Brewer 0090")).toBeInTheDocument();
-    expect(screen.getByText("Partially covered")).toBeInTheDocument();
-    expect(screen.getByText("Simulated scenario")).toBeInTheDocument();
+    expect(screen.getAllByText("Partially covered").length).toBeGreaterThan(0);
+    expect(screen.getByTestId("fulfillment-leaflet-map")).toBeInTheDocument();
+    expect(screen.getByText("Depot-First — approved facilities and distributors")).toBeInTheDocument();
     expect(screen.queryByText("RUN-INTERNAL-HIDDEN")).not.toBeInTheDocument();
   });
 
@@ -165,9 +166,10 @@ describe("MicroStar Operations Workspace", () => {
 
     renderWithProviders(<OrderDetailPage />);
     expect(await screen.findByText("ORD-008116")).toBeInTheDocument();
-    expect(screen.getByText("Schematic connection — not a road route")).toBeInTheDocument();
+    expect(screen.getByTestId("fulfillment-leaflet-map")).toBeInTheDocument();
+    expect(screen.getByText(/Schematic connection — not a road route/)).toBeInTheDocument();
     expect(screen.getByText("No validated shared-trip record is available for this proposal.")).toBeInTheDocument();
-    expect(screen.getByText("Coordinator (not a physical stop)")).toBeInTheDocument();
+    expect(screen.getByTestId("ops-ai-copilot")).toBeInTheDocument();
     await waitFor(() => {
       expect(screen.getByText("Selected in optimization run")).toBeInTheDocument();
     });

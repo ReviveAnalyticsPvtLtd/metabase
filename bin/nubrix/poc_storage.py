@@ -26,7 +26,7 @@ CREATE_TABLES_SQL = [
         `run_id` VARCHAR(64) PRIMARY KEY,
         `created_at` DATETIME NOT NULL,
         `as_of_date` DATE NOT NULL,
-        `solver_status` VARCHAR(32) NOT NULL,
+        `solver_status` VARCHAR(64) NOT NULL,
         `orders_total` INT NOT NULL,
         `orders_fully_covered` INT NOT NULL,
         `orders_partially_covered` INT NOT NULL,

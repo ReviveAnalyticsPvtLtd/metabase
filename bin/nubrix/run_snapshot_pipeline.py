@@ -45,6 +45,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="MicroStar Snapshot Extraction & Optimization Pipeline")
     parser.add_argument("--horizon", type=int, default=1000, help="Earliest-due open orders horizon (default: 1000)")
     parser.add_argument("--time-limit", type=int, default=15, help="CP-SAT solver time limit in seconds (default: 15)")
+    parser.add_argument("--source-policy", type=str, default="depot_first", choices=["depot_first", "unrestricted_nearest", "approved_peer_brewer"], help="Source eligibility policy (default: depot_first)")
     parser.add_argument("--publish", action="store_true", help="Actually write run to Railway nubrix_poc_* tables (default: dry-run)")
     args = parser.parse_args()
 
@@ -95,11 +96,16 @@ def main() -> int:
     )
 
     # 3. Run OR-Tools CP-SAT Planner
-    print("\n[3/5] Running OrToolsFulfillmentPlanner (CP-SAT)...")
+    print(f"\n[3/5] Running OrToolsFulfillmentPlanner (CP-SAT, source_policy={args.source_policy})...")
     t_opt = time.time()
-    ortools_planner = OrToolsFulfillmentPlanner(time_limit_seconds=args.time_limit, max_candidates_per_order=12)
+    ortools_planner = OrToolsFulfillmentPlanner(
+        time_limit_seconds=args.time_limit,
+        max_candidates_per_order=12,
+        source_policy=args.source_policy,
+    )
     ortools_result = ortools_planner.plan(snapshot)
     snapshot["provenance"]["planning_mode"] = ortools_result.get("planning_mode")
+    snapshot["provenance"]["source_policy"] = ortools_result.get("source_policy", args.source_policy)
     snapshot["provenance"]["objective_policy"] = ortools_result.get("objective_policy")
     snapshot["provenance"]["split_policy"] = ortools_result.get("split_policy")
     snapshot["provenance"]["max_candidates_per_order"] = ortools_result.get("max_candidates_per_order")
@@ -170,7 +176,7 @@ def main() -> int:
                 if missing_lane_seen:
                     continue
                 missing_lane_seen = True
-            if "candidate_id" in ev or reason in ("overdue", "no_stock_for_sku", "missing_lane", "carrier_capacity_zero", "vehicle_unavailable", "vehicle_window_conflict"):
+            if "candidate_id" in ev or reason in ("overdue", "no_stock_for_sku", "missing_lane", "carrier_capacity_zero", "vehicle_unavailable", "vehicle_window_conflict") or ev.get("reason_code") == "POLICY_EXCLUDED_PEER_BREWER":
                 is_sel = bool(ev.get("is_selected"))
                 rej_reason = reason
                 if not rej_reason and ev.get("is_feasible") is False:
@@ -187,7 +193,7 @@ def main() -> int:
                 if len(src_cid) > 64 or len(car_name) > 100 or (rej_reason and len(rej_reason) > 255):
                     raise ValueError(f"Evidence field exceeds MySQL column width on {outcome.order_id}")
                 evidence_list.append({
-                    "evidence_id": f"EVID-{idx+1:05d}-{ev_idx+1:02d}-{uuid.uuid4().hex[:4].upper()}",
+                    "evidence_id": f"{run_id[-6:]}-E{idx+1:05d}-{ev_idx+1:03d}",
                     "order_id": outcome.order_id,
                     "candidate_route_id": cand_route_id,
                     "source_customer_id": src_cid,
