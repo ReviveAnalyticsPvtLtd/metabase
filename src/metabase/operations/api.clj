@@ -144,6 +144,11 @@
           :is_active                (truthy-flag? (:is_active row))
           :horizon_orders           (long (or (:orders_total row) 0))
           :total_open_orders        (long (or (:total_open_orders prov) (:orders_count prov) (:orders_total row) 0))
+          :horizon_truncated        (or (truthy-flag? (:horizon_truncated prov))
+                                        (> (long (or (:total_open_orders prov) 0))
+                                           (long (or (:orders_total row) 0))))
+          :orders_outside_horizon   (max 0 (- (long (or (:total_open_orders prov) (:orders_total row) 0))
+                                              (long (or (:orders_total row) 0))))
           :orders_fully_covered     (long (or (:orders_fully_covered row) 0))
           :orders_partially_covered (long (or (:orders_partially_covered row) 0))
           :orders_uncovered         (long (or (:orders_uncovered row) 0))
@@ -182,7 +187,8 @@
    :no_dispatch           true
    :shared_trip_available true
    :missing_tables        ["Truck" "InventoryReservation"]
-   :summary               "Simulated India demonstration. Proposed plan only — persisted shared-trip details are shown when validated, but inventory is not reserved and carriers are not booked."})
+   :summary               "Simulated India demonstration. Proposed plan only — persisted shared-trip details are shown when validated, but inventory is not reserved and carriers are not booked."
+   :horizon_summary       "Coverage figures describe only the orders inside this plan's horizon. Orders outside the horizon are not covered by this run."})
 
 (defn- encode-cursor
   [m]

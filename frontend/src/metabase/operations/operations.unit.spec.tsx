@@ -22,6 +22,8 @@ const MOCK_RUN = {
   is_active: true,
   horizon_orders: 1000,
   total_open_orders: 9899,
+  horizon_truncated: true,
+  orders_outside_horizon: 8899,
   orders_fully_covered: 720,
   orders_partially_covered: 84,
   orders_uncovered: 196,
@@ -89,6 +91,14 @@ describe("MicroStar Operations Workspace", () => {
     expect(screen.getByTestId("fulfillment-leaflet-map")).toBeInTheDocument();
     expect(screen.getByText("Service-First Fallback — Facility > Distributor > Brewer")).toBeInTheDocument();
     expect(screen.queryByText("RUN-INTERNAL-HIDDEN")).not.toBeInTheDocument();
+    // Coverage must never read as network-wide: the queue states how many orders fall
+    // outside the plan horizon.
+    expect(
+      screen.getByText(/orders fall outside this plan's horizon/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/8,899 orders/i),
+    ).toBeInTheDocument();
   });
 
   it("renders OrderDetailPage with quantity summary, journey, why-plan, alternatives, and no-shared-trip notice", async () => {

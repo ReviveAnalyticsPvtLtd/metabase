@@ -7,6 +7,7 @@ export interface OperationsDisclosures {
   shared_trip_available: boolean;
   missing_tables: string[];
   summary: string;
+  horizon_summary?: string;
 }
 
 export interface OperationsRunSummary {
@@ -16,6 +17,8 @@ export interface OperationsRunSummary {
   is_active: boolean;
   horizon_orders: number;
   total_open_orders: number;
+  horizon_truncated?: boolean;
+  orders_outside_horizon?: number;
   orders_fully_covered: number;
   orders_partially_covered: number;
   orders_uncovered: number;

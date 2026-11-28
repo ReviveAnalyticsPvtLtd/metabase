@@ -280,6 +280,12 @@ export function OrdersPage() {
           <Text size="sm" c="text-secondary">
             {t`Select an order on the map or queue to preview its modeled source route, or open full evidence & trade-offs.`}
           </Text>
+          {data?.run?.horizon_truncated &&
+            (data.run.orders_outside_horizon ?? 0) > 0 && (
+              <Text size="xs" c="text-secondary" mt={4}>
+                {t`Coverage shown covers ${data.run.horizon_orders.toLocaleString()} of ${data.run.total_open_orders.toLocaleString()} open orders. ${(data.run.orders_outside_horizon ?? 0).toLocaleString()} orders fall outside this plan's horizon and are not covered by it.`}
+              </Text>
+            )}
         </div>
         <Group gap="xs">
           <Button variant="default" onClick={() => setShowMap((v) => !v)}>
