@@ -41,6 +41,21 @@ function orderDetailUrl(orderId: string, runId?: string | null): string {
   return runId ? `${base}?run_id=${encodeURIComponent(runId)}` : base;
 }
 
+// Managers read a preparation date, not an internal run identifier.
+function formatPlanDate(value?: string | null): string {
+  if (!value) {
+    return "recently";
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime())
+    ? "recently"
+    : parsed.toLocaleDateString(undefined, {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+      });
+}
+
 export function OrderDetailPage() {
   const navigate = useNavigate();
   const { orderId = "" } = useParams<{ orderId: string }>();
@@ -346,7 +361,7 @@ export function OrderDetailPage() {
         >
           <Text size="xs" fw={600} mb={4}>{t`Plan evidence`}</Text>
           <Text size="xs" c="text-secondary">
-            {t`Planning run ${run.run_id} · ${planning_policy?.source_policy_label || t`Service-first sourcing`}`}
+            {t`Plan prepared ${formatPlanDate(run.created_at)} · ${planning_policy?.source_policy_label || t`Service-first sourcing`}`}
           </Text>
         </Box>
       )}
