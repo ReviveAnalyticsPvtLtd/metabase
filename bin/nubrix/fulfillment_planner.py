@@ -711,6 +711,10 @@ class OrToolsFulfillmentPlanner:
         status = cp_model.OPTIMAL
         all_stages_optimal = True
         use_prev_fallback = False
+        # Tracks whether the freight stage reached optimality. When it did not, a cheaper
+        # feasible candidate losing is a search limitation, not a business decision, and the
+        # persisted evidence must say so.
+        freight_stage_optimal = True
 
         if feasible_candidates:
             # Stage 1: Maximize covered kegs
@@ -760,9 +764,11 @@ class OrToolsFulfillmentPlanner:
                 status = status5
                 if status5 != cp_model.OPTIMAL:
                     all_stages_optimal = False
+                    freight_stage_optimal = False
             else:
                 status = cp_model.FEASIBLE
                 all_stages_optimal = False
+                freight_stage_optimal = False
                 use_prev_fallback = True
 
         raw_solver_status = solver.StatusName(status) if feasible_candidates else "OPTIMAL"
@@ -909,6 +915,28 @@ class OrToolsFulfillmentPlanner:
                         f"Feasible, but modeled freight (INR {float(ev['freight_cost_inr']):,.2f} for {cand_qty} kegs) "
                         f"exceeds selected option (INR {chosen_freight:,.2f} for {chosen_qty} kegs)."
                     )
+                elif chosen_cand and not freight_stage_optimal:
+                    # The freight objective never reached optimality, so a cheaper feasible
+                    # candidate losing to a dearer one is a search limitation, not a
+                    # business trade-off. Say so instead of implying a considered decision.
+                    cheaper = (
+                        chosen_freight is not None
+                        and float(ev.get("freight_cost_inr", 0)) < float(chosen_freight)
+                    )
+                    if cheaper:
+                        ev["reason_code"] = "SEARCH_INCOMPLETE_CHEAPER_OPTION_UNAVAILABLE"
+                        ev["reason"] = (
+                            f"Feasible and cheaper under the model (INR {float(ev['freight_cost_inr']):,.2f} "
+                            f"vs INR {float(chosen_freight):,.2f} selected), but the freight optimisation did "
+                            f"not complete within the solver time budget, so this alternative was never chosen. "
+                            f"Re-plan with a longer budget to confirm."
+                        )
+                    else:
+                        ev["reason_code"] = "GLOBAL_OBJECTIVE_TRADEOFF"
+                        ev["reason"] = (
+                            f"Not selected in an incomplete search ({len(competing)} competing orders on "
+                            f"{ev.get('source_name') or src_cid}, {rem_qty} {sku} kegs remaining)."
+                        )
                 elif chosen_cand and cand_qty < chosen_qty:
                     ev["reason_code"] = "LOWER_COVERAGE_QUANTITY"
                     ev["reason"] = f"Selected option covers more demand ({chosen_qty} vs {cand_qty} kegs)."

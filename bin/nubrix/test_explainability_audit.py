@@ -251,6 +251,53 @@ class ExplainabilityAuditTests(unittest.TestCase):
             "tiered fallback must exhaust every role to fulfil mandatory demand",
         )
 
+    def test_cheaper_alternative_not_labelled_as_considered_tradeoff_when_search_incomplete(self):
+        """A cheaper feasible candidate losing in a non-optimal search must be labelled honestly.
+
+        Regression for the manager-reported case: a 4 km / INR 132 Brewer option was shown as
+        GLOBAL_OBJECTIVE_TRADEOFF beside a 100 km / INR 3,300 Distributor selection.
+        """
+        snap = {
+            "as_of_date": "2026-01-02",
+            "directed_lanes": True,
+            "source_policy": "cost_service_optimal",
+            "customers": {
+                "CUST-DEST": {"id": "CUST-DEST", "name": "Ludhiana Brewer 0135", "type": "Brewer", "region": "North"},
+                "CUST-0279": {"id": "CUST-0279", "name": "Ludhiana Brewer 0279", "type": "Brewer", "region": "North"},
+                "CUST-0376": {"id": "CUST-0376", "name": "Chandigarh Distributor 0376", "type": "Distributor", "region": "North"},
+            },
+            "stock": [
+                {"source": "CUST-0279", "sku": "50L", "available": 160},
+                {"source": "CUST-0376", "sku": "50L", "available": 2740},
+            ],
+            "carriers": {"CAR-4": {"id": "CAR-4", "name": "EastWest Transport", "rate_inr": 1.65, "max_load": 600}},
+            "legs": [
+                {"origin": "CUST-0279", "destination": "CUST-DEST", "km": 4},
+                {"origin": "CUST-0376", "destination": "CUST-DEST", "km": 100},
+            ],
+            "orders": [{
+                "id": "ORD-000937", "customer_id": "CUST-DEST", "sku": "50L",
+                "ordered_date": "2026-01-01", "needed_by_date": "2026-01-03",
+                "quantity_ordered": 100, "fulfilled_units": 80, "pending": 20,
+            }],
+        }
+
+        # With adequate time the cost policy must pick the 4 km Brewer option.
+        optimal = OrToolsFulfillmentPlanner(time_limit_seconds=20, source_policy="cost_service_optimal").plan(snap)
+        chosen = optimal["outcomes"][0]
+        self.assertEqual(chosen.source_customer_id, "CUST-0279")
+        self.assertEqual(chosen.distance_km, 4)
+        self.assertAlmostEqual(chosen.freight_cost_inr, 132.0, places=2)
+
+        # No rejected candidate may claim a freight reason when its modeled freight is not
+        # actually higher than the selected option.
+        for ev in chosen.evidence:
+            if ev.get("reason_code") == "HIGHER_MODELED_FREIGHT":
+                self.assertGreater(
+                    float(ev.get("freight_cost_inr", 0)),
+                    float(chosen.freight_cost_inr),
+                )
+
     def test_overdue_against_as_of_date_fails_closed(self):
         snap = _sample_snapshot()
         snap["as_of_date"] = "2026-11-27"
