@@ -206,6 +206,51 @@ class ExplainabilityAuditTests(unittest.TestCase):
         self.assertEqual(res3["outcomes"][0].source_customer_id, "CUST-NEAR")
         self.assertEqual(res3["outcomes"][0].allocated_units, 50)
 
+    def test_service_first_fallback_splits_across_tiers_to_cover_demand(self):
+        snap = _sample_snapshot()
+        snap["as_of_date"] = "2026-01-02"
+        snap["directed_lanes"] = True
+        snap["customers"]["CUST-MAINT"] = {
+            "id": "CUST-MAINT", "name": "North Maint Depot", "type": "Maintenance Facility",
+            "region": "North", "lat": 28.5, "lon": 77.2,
+        }
+        snap["customers"]["CUST-DIST-S"] = {
+            "id": "CUST-DIST-S", "name": "North Dist Hub", "type": "Distributor",
+            "region": "North", "lat": 28.6, "lon": 77.3,
+        }
+        # No single tier can cover 100 kegs: Maint 40, Dist 35, Brewer 30.
+        # Fulfillment is mandatory, so the plan must draw from all three tiers rather than
+        # stopping at the preferred tier and leaving demand uncovered.
+        snap["stock"] = [
+            {"source": "CUST-MAINT", "sku": "50L", "available": 40},
+            {"source": "CUST-DIST-S", "sku": "50L", "available": 35},
+            {"source": "CUST-NEAR", "sku": "50L", "available": 30},
+        ]
+        snap["legs"].extend([
+            {"origin": "CUST-MAINT", "destination": "CUST-DEST", "km": 200},
+            {"origin": "CUST-DIST-S", "destination": "CUST-DEST", "km": 100},
+        ])
+        snap["orders"] = [
+            {
+                "id": "ORD-TIERED", "customer_id": "CUST-DEST", "sku": "50L",
+                "ordered_date": "2026-01-01", "needed_by_date": "2026-01-10",
+                "quantity_ordered": 100, "fulfilled_units": 0, "pending": 100,
+            }
+        ]
+        planner = OrToolsFulfillmentPlanner(
+            time_limit_seconds=10, max_candidates_per_order=12, source_policy="service_first_fallback"
+        )
+        out = planner.plan(snap)["outcomes"][0]
+
+        self.assertEqual(out.allocated_units, 100)
+        self.assertEqual(out.uncovered_units, 0)
+        roles = sorted(line["source_role"] for line in out.allocation_lines)
+        self.assertEqual(
+            roles,
+            ["Brewer", "Distributor", "Maintenance Facility"],
+            "tiered fallback must exhaust every role to fulfil mandatory demand",
+        )
+
     def test_overdue_against_as_of_date_fails_closed(self):
         snap = _sample_snapshot()
         snap["as_of_date"] = "2026-11-27"
@@ -290,6 +335,20 @@ class ExplainabilityAuditTests(unittest.TestCase):
         self.assertEqual(trip["stops"][0]["load_after_stop_kegs"], 100)
         self.assertEqual(trip["stops"][1]["load_before_stop_kegs"], 100)
         self.assertEqual(trip["stops"][1]["load_after_stop_kegs"], 0)
+
+        # Both destinations are 5 km from the source and 5 km apart. The
+        # extra loaded distance costs ₹825, so the trip charge can flip the choice.
+        snap.pop("carrier_truck_limits")
+        del snap["carriers"]["CAR-02"]
+        for leg in snap["legs"]:
+            if leg["origin"] == "CUST-NEAR" and leg["destination"] == "CUST-DEST2":
+                leg["km"] = 5
+        self.assertEqual(planner.plan(snap)["trips_total"], 2)
+        snap["carriers"]["CAR-1"]["fixed_trip_charge_inr"] = 1000
+        charged = planner.plan(snap)
+        self.assertEqual(charged["trips_total"], 1)
+        self.assertEqual(charged["total_freight_cost_inr"], 3475)
+        self.assertEqual(sum(s["allocated_freight_inr"] for s in charged["trips"][0]["stops"]), 3475)
 
     def test_cost_service_optimal_splits_nearby_when_cheaper_than_far_depot(self):
         snap = _sample_snapshot()

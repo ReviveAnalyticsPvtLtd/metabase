@@ -97,7 +97,16 @@ def run_what_if_scenario(
         ]
 
     if scenario_name == "split_policy_toggle":
-        scen_snapshot["allow_split"] = not bool(scen_snapshot.get("allow_split", True))
+        current_split_policy = bool(
+            scen_snapshot.get(
+                "allow_order_splits",
+                scen_snapshot.get(
+                    "allow_split",
+                    scen_snapshot.get("source_policy") == "cost_service_optimal",
+                ),
+            ),
+        )
+        scen_snapshot["allow_order_splits"] = not current_split_policy
 
     scen_res = planner.plan(scen_snapshot)
     scen_sum = _summarize(scen_res)

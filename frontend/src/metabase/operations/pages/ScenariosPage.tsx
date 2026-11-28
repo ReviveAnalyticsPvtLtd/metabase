@@ -131,11 +131,11 @@ export function ScenariosPage() {
                   </div>
                   <div>
                     <Text size="xs" c="text-secondary">{t`Fully Covered`}</Text>
-                    <Text size="xl" fw={700} c="green">{active.orders_fully_covered.toLocaleString()}</Text>
+                    <Text size="xl" fw={700} c="success">{active.orders_fully_covered.toLocaleString()}</Text>
                   </div>
                   <div>
                     <Text size="xs" c="text-secondary">{t`Uncovered Orders`}</Text>
-                    <Text size="xl" fw={700} c="red">{active.orders_uncovered.toLocaleString()}</Text>
+                    <Text size="xl" fw={700} c="error">{active.orders_uncovered.toLocaleString()}</Text>
                   </div>
                   <div>
                     <Text size="xs" c="text-secondary">{t`Modeled Freight`}</Text>

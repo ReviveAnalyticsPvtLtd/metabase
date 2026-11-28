@@ -25,6 +25,13 @@ import { SimulationBanner } from "../components/SimulationBanner";
 import { StatusBadge } from "../components/StatusBadge";
 import type { OrderQueueItem, OrdersListResponse } from "../types";
 
+// Pin navigation to the resolved run so detail, alternatives and counterfactuals are read from
+// the same immutable plan the queue was built from.
+function orderDetailUrl(orderId: string, runId?: string): string {
+  const base = `/operations/orders/${encodeURIComponent(orderId)}`;
+  return runId ? `${base}?run_id=${encodeURIComponent(runId)}` : base;
+}
+
 function statusColor(status: string): string {
   if (status === "Fully covered") {
     return "#16A34A";
@@ -45,6 +52,7 @@ export function OrdersPage() {
   const kegSize = searchParams.get("keg_size") || "";
   const exceptionsOnly = searchParams.get("exceptions_only") === "true";
   const cursor = searchParams.get("cursor") || undefined;
+  const runId = searchParams.get("run_id") || undefined;
   const selectedIdParam = searchParams.get("selected") || "";
 
   const [cursorHistory, setCursorHistory] = useState<string[]>([]);
@@ -87,6 +95,7 @@ export function OrdersPage() {
       exceptions_only: exceptionsOnly,
       cursor,
       limit: 50,
+      run_id: runId,
     })
       .then((res) => {
         if (!cancelled) {
@@ -112,7 +121,7 @@ export function OrdersPage() {
     return () => {
       cancelled = true;
     };
-  }, [q, status, region, kegSize, exceptionsOnly, cursor, reloadTick, selectedIdParam]);
+  }, [q, status, region, kegSize, exceptionsOnly, cursor, runId, reloadTick, selectedIdParam]);
 
   const updateFilter = useCallback(
     (key: string, value: string | boolean) => {
@@ -430,7 +439,7 @@ export function OrdersPage() {
                   <Button
                     size="xs"
                     variant="filled"
-                    onClick={() => navigate(`/operations/orders/${encodeURIComponent(selectedOrder.order_id)}`)}
+                    onClick={() => navigate(orderDetailUrl(selectedOrder.order_id, data?.run.run_id))}
                   >
                     {t`Open order →`}
                   </Button>
@@ -509,7 +518,7 @@ export function OrdersPage() {
                           variant="default"
                           onClick={(e) => {
                             e.stopPropagation();
-                            navigate(`/operations/orders/${encodeURIComponent(row.order_id)}`);
+                            navigate(orderDetailUrl(row.order_id, data?.run.run_id));
                           }}
                         >
                           {t`Open order`}

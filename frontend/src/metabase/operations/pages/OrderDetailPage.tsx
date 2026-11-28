@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { t } from "ttag";
 
-import { useNavigate, useParams } from "metabase/router";
+import { useNavigate, useParams, useSearchParams } from "metabase/router";
 import {
   Badge,
   Box,
@@ -34,9 +34,18 @@ import type {
   OrderOverrideResponse,
 } from "../types";
 
+// Pin related-order navigation to the run being inspected so the next page cannot silently
+// switch to a newly activated plan.
+function orderDetailUrl(orderId: string, runId?: string | null): string {
+  const base = `/operations/orders/${encodeURIComponent(orderId)}`;
+  return runId ? `${base}?run_id=${encodeURIComponent(runId)}` : base;
+}
+
 export function OrderDetailPage() {
   const navigate = useNavigate();
   const { orderId = "" } = useParams<{ orderId: string }>();
+  const [searchParams] = useSearchParams();
+  const runId = searchParams.get("run_id") || undefined;
 
   const [detail, setDetail] = useState<OrderDetailResponse | null>(null);
   const [alts, setAlts] = useState<OrderAlternativesResponse | null>(null);
@@ -67,8 +76,8 @@ export function OrderDetailPage() {
     setHoveredAlt(null);
     setCfError(null);
     Promise.all([
-      fetchOrderDetail(orderId),
-      fetchOrderAlternatives(orderId).catch(() => null),
+      fetchOrderDetail(orderId, runId),
+      fetchOrderAlternatives(orderId, runId).catch(() => null),
     ])
       .then(([d, a]) => {
         if (!cancelled) {
@@ -86,7 +95,7 @@ export function OrderDetailPage() {
     return () => {
       cancelled = true;
     };
-  }, [orderId]);
+  }, [orderId, runId]);
 
   const handleInspectTradeoff = (candidateRouteId: number) => {
     setInspectedCandId(candidateRouteId);
@@ -95,7 +104,7 @@ export function OrderDetailPage() {
     setTimeout(() => {
       tradeoffRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
     }, 30);
-    fetchOrderCounterfactual(orderId, candidateRouteId)
+    fetchOrderCounterfactual(orderId, candidateRouteId, detail?.run.run_id || runId)
       .then((res) => {
         setCounterfactual(res);
         setCfLoading(false);
@@ -194,7 +203,7 @@ export function OrderDetailPage() {
               color: "#0D9488",
               radius: 8,
               selected: false,
-              onClick: () => navigate(`/operations/orders/${encodeURIComponent(st.order_id)}`),
+              onClick: () => navigate(orderDetailUrl(st.order_id, detail?.run.run_id || runId)),
             });
           }
         }
@@ -382,7 +391,7 @@ export function OrderDetailPage() {
           </div>
           <div>
             <Text size="xs" c="text-secondary">{t`Still uncovered`}</Text>
-            <Text size="lg" fw={700} c={order.uncovered_units > 0 ? "red" : undefined}>
+            <Text size="lg" fw={700} c={order.uncovered_units > 0 ? "error" : undefined}>
               {order.uncovered_units.toLocaleString()}
             </Text>
           </div>
@@ -442,7 +451,7 @@ export function OrderDetailPage() {
           </Flex>
           {detail.allocation_lines && detail.allocation_lines.length > 1 ? (
             <Box mb="md">
-              <Text size="xs" fw={600} c="blue" mb="xs">
+              <Text size="xs" fw={600} c="brand" mb="xs">
                 {t`Multi-source split fulfillment (${detail.allocation_lines.length} nearby sources combined to save cost):`}
               </Text>
               {detail.allocation_lines.map((ln) => (
@@ -490,13 +499,13 @@ export function OrderDetailPage() {
             <Flex key={item.label} justify="space-between" py={5} style={{ borderBottom: "1px solid var(--mb-color-border)" }}>
               <Text size="sm" fw={500}>{item.label}</Text>
               <Group gap="xs">
-                <Text size="sm" c={(item as any).overdue_vs_as_of ? "red" : undefined}>
+                <Text size="sm" c={item.overdue_vs_as_of ? "error" : undefined}>
                   {item.date
                     ? String(item.date).slice(0, 10)
                     : item.days !== undefined
                     ? `${item.days} day(s)`
                     : item.feasible !== undefined
-                    ? (item as any).overdue_vs_as_of
+                    ? item.overdue_vs_as_of
                       ? t`Overdue vs. planning as-of`
                       : item.feasible
                       ? t`Within window`
@@ -717,7 +726,7 @@ export function OrderDetailPage() {
                     key={ao.order_id}
                     size="xs"
                     variant="default"
-                    onClick={() => navigate(`/operations/orders/${ao.order_id}`)}
+                    onClick={() => navigate(orderDetailUrl(ao.order_id, detail?.run.run_id || runId))}
                   >
                     {`${ao.order_id} (${ao.allocated_delta_kegs != null ? `${ao.allocated_delta_kegs >= 0 ? "+" : ""}${ao.allocated_delta_kegs}` : ao.allocated_units} kegs)`}
                   </Button>
@@ -887,7 +896,7 @@ export function OrderDetailPage() {
                         <Button
                           size="xs"
                           variant="subtle"
-                          onClick={() => navigate(`/operations/orders/${encodeURIComponent(st.order_id)}`)}
+                          onClick={() => navigate(orderDetailUrl(st.order_id, detail?.run.run_id || runId))}
                         >
                           {st.order_id}
                         </Button>

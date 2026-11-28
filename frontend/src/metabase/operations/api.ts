@@ -52,30 +52,39 @@ export function fetchOperationsOrders(params: {
   exceptions_only?: boolean;
   cursor?: string;
   limit?: number;
+  run_id?: string;
 }): Promise<OrdersListResponse> {
   return fetchJson<OrdersListResponse>(`/api/operations/orders${buildQuery(params)}`);
 }
 
-export function fetchOrderDetail(orderId: string): Promise<OrderDetailResponse> {
+export function fetchOrderDetail(
+  orderId: string,
+  runId?: string,
+): Promise<OrderDetailResponse> {
   return fetchJson<OrderDetailResponse>(
-    `/api/operations/orders/${encodeURIComponent(orderId)}`,
+    `/api/operations/orders/${encodeURIComponent(orderId)}${buildQuery({ run_id: runId })}`,
   );
 }
 
 export function fetchOrderAlternatives(
   orderId: string,
+  runId?: string,
 ): Promise<OrderAlternativesResponse> {
   return fetchJson<OrderAlternativesResponse>(
-    `/api/operations/orders/${encodeURIComponent(orderId)}/alternatives`,
+    `/api/operations/orders/${encodeURIComponent(orderId)}/alternatives${buildQuery({ run_id: runId })}`,
   );
 }
 
 export function fetchOrderCounterfactual(
   orderId: string,
   candidateRouteId: number,
+  runId?: string,
 ): Promise<OrderCounterfactualResponse> {
   return fetchJson<OrderCounterfactualResponse>(
-    `/api/operations/orders/${encodeURIComponent(orderId)}/counterfactual?candidate_route_id=${encodeURIComponent(String(candidateRouteId))}`,
+    `/api/operations/orders/${encodeURIComponent(orderId)}/counterfactual${buildQuery({
+      candidate_route_id: String(candidateRouteId),
+      run_id: runId,
+    })}`,
   );
 }
 

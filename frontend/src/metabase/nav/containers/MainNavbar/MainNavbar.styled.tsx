@@ -93,7 +93,7 @@ export const SidebarHeading = styled.h4`
   text-transform: uppercase;
   letter-spacing: 0.45px;
   padding-inline-start: var(--mantine-spacing-lg);
-`;
+` as unknown as typeof Box;
 
 export const LoadingAndErrorContainer = styled.div`
   display: flex;

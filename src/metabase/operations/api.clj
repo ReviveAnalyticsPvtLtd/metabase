@@ -137,7 +137,7 @@
                       (when-let [s (:provenance_json row)]
                         (json/parse-string (str s) true))
                       (catch Exception _ nil))
-             policy (or (:source_policy prov) "depot_first")]
+             policy (or (:source_policy prov) "service_first_fallback")]
          {:run_id                   (:run_id row)
           :created_at               (:created_at row)
           :as_of_date               (:as_of_date row)
@@ -180,9 +180,9 @@
    :no_reservation        true
    :no_booking            true
    :no_dispatch           true
-   :shared_trip_available false
+   :shared_trip_available true
    :missing_tables        ["Truck" "InventoryReservation"]
-   :summary               "Simulated India demonstration. Proposed plan only — inventory is not reserved and carriers are not booked."})
+   :summary               "Simulated India demonstration. Proposed plan only — persisted shared-trip details are shown when validated, but inventory is not reserved and carriers are not booked."})
 
 (defn- encode-cursor
   [m]
@@ -892,7 +892,7 @@
            (fn [r]
              (let [prov   (try (when-let [s (:provenance_json r)] (json/parse-string (str s) true)) (catch Exception _ nil))
                    policy (or (:source_policy prov)
-                              (if (truthy-flag? (:is_active r)) "depot_first" "unrestricted_nearest"))
+                              (if (truthy-flag? (:is_active r)) "service_first_fallback" "unrestricted_nearest"))
                    roles  (run-native-query
                            "SELECT COALESCE(c.CustomerType, 'Unallocated') AS source_role,
                                    COUNT(*) AS orders_count,

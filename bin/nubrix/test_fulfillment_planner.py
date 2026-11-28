@@ -168,9 +168,20 @@ class FulfillmentPlannerTest(unittest.TestCase):
         snapshot["orders"] = [snapshot["orders"][0]]
         res = OrToolsFulfillmentPlanner().plan(snapshot)
         outcome = res["outcomes"][0]
-        self.assertEqual(outcome.allocated_units, 60)
-        self.assertEqual(outcome.uncovered_units, 40)
-        self.assertEqual(outcome.planning_status, "Partially covered")
+        # A 60-keg carrier cap applies per shipment line, not per order. With two eligible
+        # sources the order is covered by split lines, each of which must respect the cap.
+        self.assertEqual(outcome.allocated_units, 100)
+        self.assertGreaterEqual(len(outcome.allocation_lines), 2)
+        for line in outcome.allocation_lines:
+            self.assertLessEqual(line["allocated_units"], 60)
+
+        # A single capped source cannot cover the order, and the shortfall is reported honestly.
+        snapshot["stock"] = [{"source": "DEPOT-01", "sku": "50L", "available": 100}]
+        single = OrToolsFulfillmentPlanner().plan(snapshot)
+        single_outcome = single["outcomes"][0]
+        self.assertEqual(single_outcome.allocated_units, 60)
+        self.assertEqual(single_outcome.uncovered_units, 40)
+        self.assertEqual(single_outcome.planning_status, "Partially covered")
 
     def test_partial_allocation_avoids_stranding_shared_stock(self):
         snapshot = self.base_snapshot()
@@ -309,7 +320,7 @@ class FulfillmentPlannerTest(unittest.TestCase):
             with self.assertRaises(InvariantValidationError):
                 OrToolsFulfillmentPlanner().plan(snapshot)
 
-    def test_stage2_residual_revalidated_for_physical_legs_and_vehicle_window(self):
+    def test_vehicle_mode_revalidates_physical_legs_and_window(self):
         from collections import Counter
         from fulfillment_planner import PlannerOutcome
 
@@ -334,8 +345,13 @@ class FulfillmentPlannerTest(unittest.TestCase):
         ]
 
         res = OrToolsFulfillmentPlanner().plan(snapshot)
+        # Vehicles are modelled, so the solver enforces non-overlapping vehicle intervals itself
+        # while still allocating the partial remainder inside the model. No greedy post-solve pass
+        # is used, so the persisted plan matches the declared objective.
         self.assertEqual(res["total_allocated_kegs"], 100)
-        self.assertEqual(res["solver_status"], "FEASIBLE (bounded_candidates_and_residual)")
+        allocations = {o.order_id: o.allocated_units for o in res["outcomes"]}
+        self.assertEqual(allocations, {"ORD-01": 70, "ORD-02": 30})
+        self.assertEqual(sum(allocations.values()), 100)
 
         # Prove validate_invariants rejects missing physical leg and vehicle window violation
         planner = OrToolsFulfillmentPlanner()

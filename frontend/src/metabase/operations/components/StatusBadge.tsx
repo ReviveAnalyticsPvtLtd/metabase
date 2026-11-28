@@ -1,5 +1,5 @@
 import { Badge, Group, Icon } from "metabase/ui";
-import type { IconName } from "metabase/ui";
+import type { IconName } from "metabase-types/api";
 
 interface StatusConfig {
   bg: string;
@@ -66,7 +66,7 @@ export function StatusBadge({ status }: { status?: string | null }) {
     bg: "#F1F3F4",
     fg: "#3C4043",
     border: "#DADCE0",
-    icon: "info" as IconName,
+    icon: "info",
     label: status || "Unknown",
   };
   return (

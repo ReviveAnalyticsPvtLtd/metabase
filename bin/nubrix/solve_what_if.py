@@ -340,7 +340,7 @@ def main() -> int:
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--horizon", type=int, default=1000)
     parser.add_argument("--time-limit", type=int, default=12)
-    parser.add_argument("--source-policy", default="cost_service_optimal")
+    parser.add_argument("--source-policy", default="service_first_fallback")
     parser.add_argument("--snapshot-file", default=None)
     parser.add_argument("--cache-file", default="/tmp/nubrix_snapshot_cache.json")
     parser.add_argument("--order-id", default=None)

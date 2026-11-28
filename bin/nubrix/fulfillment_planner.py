@@ -163,7 +163,7 @@ class OrToolsFulfillmentPlanner:
         self,
         time_limit_seconds: int = 15,
         max_candidates_per_order: int = 20,
-        source_policy: str = "depot_first",
+        source_policy: str = "service_first_fallback",
         default_truck_capacity: int = MAX_TRUCK_CAPACITY_KEGS,
     ):
         self.time_limit_seconds = time_limit_seconds
@@ -203,9 +203,16 @@ class OrToolsFulfillmentPlanner:
         directed_lanes = bool(snapshot.get("directed_lanes", False))
         distributor_mode = str(snapshot.get("distributor_mode", "coordinator"))
         handling_days = int(snapshot.get("distributor_handling_days", 0) or 0)
-        source_policy = str(snapshot.get("source_policy", self.source_policy) or "depot_first")
+        source_policy = str(snapshot.get("source_policy", self.source_policy) or "service_first_fallback")
         vehicles = list(snapshot.get("vehicles") or [])
-        allow_order_splits = bool(snapshot.get("allow_order_splits", source_policy == "cost_service_optimal")) and not vehicles
+        # Fulfillment is mandatory, so partial allocation across eligible sources is the default
+        # and stays enabled when a dedicated fleet is modelled: a vehicle interval is optional on
+        # the candidate's boolean, so a partial quantity does not break non-overlap. It is off only
+        # for the `unrestricted_nearest` benchmark, which is defined as nearest-single-source so its
+        # numbers stay comparable to earlier runs. Previously a greedy post-solve pass covered the
+        # remainder, which silently overrode the solver objective.
+        split_default = source_policy != "unrestricted_nearest"
+        allow_order_splits = bool(snapshot.get("allow_order_splits", split_default))
         consolidate_trips = bool(snapshot.get("consolidate_trips", False))
         carrier_truck_limits = dict(snapshot.get("carrier_truck_limits") or {})
         # When consolidating multi-order trips in Phase 2, Phase 1 focuses on source selection and
@@ -644,16 +651,23 @@ class OrToolsFulfillmentPlanner:
         if allow_order_splits:
             volume_expr = sum(qty_vars[c.candidate_id] for c in feasible_candidates)
             urgency_expr = sum(order_urgency.get(c.order_id, 1) * qty_vars[c.candidate_id] for c in feasible_candidates)
-            # Cost minimization + mild ₹500/split dispatch friction + soft role preference (0 / 5 / 15 paise per keg)
+            # Pure modeled freight plus a declared fixed dispatch charge per selected candidate.
+            # Source-role preference is enforced by its own stage below, not by a price fudge.
             cost_terms = []
             for c in feasible_candidates:
-                s_type = customers.get(c.source_customer_id, {}).get("type", "")
-                role_paise = 0 if s_type == "Maintenance Facility" else (5 if s_type == "Distributor" else 15)
-                unit_paise = int(round(c.distance_km * c.cost_per_keg_km * PAISE_PER_INR)) + role_paise
+                unit_paise = int(round(c.distance_km * c.cost_per_keg_km * PAISE_PER_INR))
                 cost_terms.append(unit_paise * qty_vars[c.candidate_id] + 50_000 * choice_vars[c.candidate_id])
             freight_expr = sum(cost_terms)
-            brewer_expr = 0
-            dist_expr = 0
+            brewer_expr = sum(
+                qty_vars[c.candidate_id]
+                for c in feasible_candidates
+                if customers.get(c.source_customer_id, {}).get("type") == "Brewer"
+            )
+            dist_expr = sum(
+                qty_vars[c.candidate_id]
+                for c in feasible_candidates
+                if customers.get(c.source_customer_id, {}).get("type") == "Distributor"
+            )
         else:
             volume_expr = sum(c.quantity * choice_vars[c.candidate_id] for c in feasible_candidates)
             urgency_expr = sum(order_urgency.get(c.order_id, 1) * choice_vars[c.candidate_id] for c in feasible_candidates)
@@ -722,10 +736,14 @@ class OrToolsFulfillmentPlanner:
             else:
                 all_stages_optimal = False
 
-            # Stage 3: Strict role hierarchy only when explicitly requested
-            if not allow_order_splits and source_policy in ("service_first_fallback", "approved_peer_brewer", "depot_first"):
+            # Stage 3: Source-role hierarchy, only for policies that declare role before freight.
+            # Service is already fixed by Stages 1-2, so this can only trade between equally-serving
+            # plans: prefer Maintenance, then Distributor, then Brewer. Coverage cannot regress
+            # because volume and urgency are already bounded. `cost_service_optimal` deliberately
+            # skips this stage: its contract is cheapest qualifying source at equal service.
+            if source_policy in ("service_first_fallback", "approved_peer_brewer"):
                 max_total_kegs = sum(int(o["pending"]) for o in orders) + 1
-                role_expr = (brewer_expr * (max_total_kegs if source_policy in ("service_first_fallback", "approved_peer_brewer") else 0)) + dist_expr
+                role_expr = (brewer_expr * max_total_kegs) + dist_expr
                 status3 = _solve_stage(role_expr, False, total_budget * 0.25, prev_solution)
                 if status3 in (cp_model.OPTIMAL, cp_model.FEASIBLE):
                     if status3 != cp_model.OPTIMAL:

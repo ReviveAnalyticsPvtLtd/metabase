@@ -80,12 +80,21 @@ class WhatIfSimulatorTest(unittest.TestCase):
         self.assertTrue(res_no_dist.is_simulation)
         self.assertEqual(res_no_dist.scenario_allocated_kegs, 100)
 
+        split_snapshot = copy.deepcopy(self.snapshot)
+        split_snapshot["source_policy"] = "cost_service_optimal"
+        split_snapshot["allow_order_splits"] = True
+        split_snapshot["stock"] = [
+            {"source": "SRC-1", "sku": "50L", "available": 40},
+            {"source": "DST-1", "sku": "50L", "available": 60},
+        ]
         res_split = run_what_if_scenario(
             scenario_name="split_policy_toggle",
-            snapshot=self.snapshot,
+            snapshot=split_snapshot,
         )
         self.assertTrue(res_split.is_simulation)
-        self.assertEqual(res_split.scenario_allocated_kegs, 100)
+        self.assertEqual(res_split.scenario_allocated_kegs, 60)
+        self.assertEqual(res_split.baseline_allocated_kegs, 100)
+        self.assertEqual(res_split.allocated_delta_kegs, -40)
 
 
 if __name__ == "__main__":

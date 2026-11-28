@@ -77,7 +77,7 @@ export function OpsCopilotPanel({
     >
       <Flex justify="space-between" align="center" mb="xs" wrap="wrap" gap="xs">
         <Group gap="xs">
-          <Icon name="insight" size={16} color="var(--mb-color-brand)" />
+          <Icon name="insight" size={16} c="brand" />
           <Title order={5}>{t`Plan explanation`}</Title>
           <Text size="xs" c="text-secondary">
             {t`Deterministic, solver-backed Operations decision support. No external AI is used.`}

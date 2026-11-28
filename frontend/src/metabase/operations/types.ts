@@ -77,6 +77,7 @@ export interface OrderTimelineItem {
   date?: string;
   days?: number;
   feasible?: boolean;
+  overdue_vs_as_of?: boolean;
   basis: string;
 }
 
@@ -98,6 +99,8 @@ export interface OrderDetailItem extends OrderQueueItem {
   selected_candidate_id?: number | null;
   decision_stage?: string | null;
   omitted_candidates_count?: number;
+  stop_sequence?: number | null;
+  trip_id?: string | null;
   cost_formula?: string | null;
   why_this_plan: string;
   timeline: OrderTimelineItem[];
@@ -110,6 +113,8 @@ export interface ConsistencyCheck {
 
 export interface PlanningPolicy {
   mode: string;
+  source_policy?: string | null;
+  source_policy_label?: string | null;
   split_policy: string;
   objective_policy: string;
   decision_stage: string;

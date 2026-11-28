@@ -111,9 +111,15 @@ def main() -> int:
     parser.add_argument(
         "--source-policy",
         type=str,
-        default="cost_service_optimal",
+        default="service_first_fallback",
         choices=["cost_service_optimal", "service_first_fallback", "depot_first", "unrestricted_nearest", "approved_peer_brewer"],
-        help="Source eligibility policy (default: cost_service_optimal)",
+        help=(
+            "Source eligibility policy (default: service_first_fallback). "
+            "service_first_fallback maximizes on-time service, then prefers Maintenance Facility > "
+            "Distributor > Brewer, then minimizes modeled freight, splitting across tiers when one "
+            "tier cannot cover demand. depot_first hard-excludes Brewers and is retained only for "
+            "comparison runs."
+        ),
     )
     parser.add_argument(
         "--as-of-date",

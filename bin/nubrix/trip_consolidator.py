@@ -47,6 +47,7 @@ def _evaluate_trip_sequence(
     directed_lanes: bool,
     as_of_d: Optional[date],
     rate_inr: float,
+    fixed_trip_charge_paise: int = 0,
 ) -> Optional[Dict[str, Any]]:
     """Verify directed legs and deadlines for an ordered sequence of stops and compute physical keg-km cost."""
     total_kegs = sum(o["allocated_units"] for o in seq_orders)
@@ -104,7 +105,7 @@ def _evaluate_trip_sequence(
         prev_id = dest_id
         prev_name = dest_name
 
-    total_freight_paise = int(round(total_keg_km * rate_inr * PAISE_PER_INR))
+    total_freight_paise = int(round(total_keg_km * rate_inr * PAISE_PER_INR)) + fixed_trip_charge_paise
     total_freight_inr = round(total_freight_paise / float(PAISE_PER_INR), 2)
 
     # Allocate total_freight_paise proportionally by delivered kegs (exact paise sum)
@@ -182,6 +183,13 @@ def consolidate_trips_cpsat(
     )
     if not carrier_list:
         return [], {}
+
+    fixed_charges = {}
+    for carrier in carrier_list:
+        charge = float(carrier.get("fixed_trip_charge_inr", 0) or 0)
+        if not math.isfinite(charge) or charge < 0:
+            raise ValueError(f"Invalid fixed trip charge for {carrier['name']}")
+        fixed_charges[carrier["id"]] = round(charge * PAISE_PER_INR)
 
     max_carrier_cap = max(int(c["max_load"]) for c in carrier_list)
     by_line_raw: Dict[str, Any] = {}
@@ -263,9 +271,9 @@ def consolidate_trips_cpsat(
             "stop_count": len(seq_eval["stops"]),
             "total_distance_km": seq_eval["total_distance_km"],
             "total_keg_km": seq_eval["total_keg_km"],
-            "fixed_trip_charge_inr": float(car.get("fixed_trip_charge_inr", 0.0) or 0.0),
-            "total_freight_paise": seq_eval["total_freight_paise"] + int(round(float(car.get("fixed_trip_charge_inr", 0.0) or 0.0) * PAISE_PER_INR)),
-            "total_freight_inr": round(seq_eval["total_freight_inr"] + float(car.get("fixed_trip_charge_inr", 0.0) or 0.0), 2),
+            "fixed_trip_charge_paise": fixed_charges[car["id"]],
+            "total_freight_paise": seq_eval["total_freight_paise"],
+            "total_freight_inr": seq_eval["total_freight_inr"],
             "dispatch_date": str(dispatch_d),
             "line_ids": line_ids,
             "order_ids": order_ids,
@@ -287,7 +295,8 @@ def consolidate_trips_cpsat(
                 if int(car["max_load"]) < o["allocated_units"]:
                     continue
                 ev = _evaluate_trip_sequence(
-                    src_id, src_name, [o], customers, distance_map, directed_lanes, as_of_d, float(car["rate_inr"])
+                    src_id, src_name, [o], customers, distance_map, directed_lanes, as_of_d,
+                    float(car["rate_inr"]), fixed_charges[car["id"]],
                 )
                 if ev is not None:
                     _add_trip_candidate(src_id, src_name, src_role, ev, car)
@@ -333,7 +342,8 @@ def consolidate_trips_cpsat(
                             ev_c = _evaluate_trip_sequence(
                                 src_id, src_name,
                                 [next(x for x in grp2 if x["line_id"] == s["line_id"]) for s in base_ev2["stops"]],
-                                customers, distance_map, directed_lanes, as_of_d, float(car["rate_inr"])
+                                customers, distance_map, directed_lanes, as_of_d,
+                                float(car["rate_inr"]), fixed_charges[car["id"]],
                             )
                             if ev_c is not None:
                                 _add_trip_candidate(src_id, src_name, src_role, ev_c, car)
@@ -366,7 +376,8 @@ def consolidate_trips_cpsat(
                                         ev_pc = _evaluate_trip_sequence(
                                             src_id, src_name,
                                             [next(x for x in pack if x["line_id"] == s["line_id"]) for s in base_ev_p["stops"]],
-                                            customers, distance_map, directed_lanes, as_of_d, float(car["rate_inr"])
+                                            customers, distance_map, directed_lanes, as_of_d,
+                                            float(car["rate_inr"]), fixed_charges[car["id"]],
                                         )
                                         if ev_pc is not None:
                                             _add_trip_candidate(src_id, src_name, src_role, ev_pc, car)
@@ -514,7 +525,9 @@ def validate_consolidated_trips(
         if rem != 0:
             raise ValueError(f"Trip {t.get('trip_code')} residual load {rem} != 0")
 
-        expected_freight = round(sum_keg_km * float(t["rate_inr"]), 2)
+        expected_paise = round(sum_keg_km * float(t["rate_inr"]) * PAISE_PER_INR)
+        expected_paise += t.get("fixed_trip_charge_paise", 0)
+        expected_freight = expected_paise / PAISE_PER_INR
         if abs(expected_freight - float(t["total_freight_inr"])) > 0.05:
             raise ValueError(
                 f"Trip {t.get('trip_code')} freight mismatch: {t['total_freight_inr']} vs {expected_freight}"
